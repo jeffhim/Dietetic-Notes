@@ -8996,8 +8996,46 @@
           catch(e){ if(e.code!=='failed-precondition'&&e.code!=='unimplemented') console.log('Persistence:'+e.message); }
         }
         $('#login-screen').style.display='flex';
-        firebase.auth().onAuthStateChanged(u=>{
-          if(u){ store=new FirebaseStore(firebase.firestore(),u.uid); $('#login-screen').style.display='none'; $('#app').classList.add('active'); loadData(); showView('view-cats'); }
+        firebase.auth().onAuthStateChanged(async u=>{
+          if(u){
+            store=new FirebaseStore(firebase.firestore(),u.uid);
+            /* Seed Firebase if empty (first login) */
+            try{
+              var snap=await firebase.firestore().collection('users').doc(u.uid).collection('categories').limit(1).get();
+              if(snap.empty){
+                var mem=new InMemoryStore();
+                var db=firebase.firestore();
+                var base=db.collection('users').doc(u.uid);
+                var idMap={};
+                /* Write in batches of 400 (Firestore limit is 500 per batch) */
+                var ops=[];
+                Object.keys(mem._d.categories).forEach(function(oldId){
+                  var c=mem._d.categories[oldId];
+                  var ref=base.collection('categories').doc();
+                  idMap[oldId]=ref.id;
+                  ops.push({ref:ref,data:{name:c.name,sublabel:c.sublabel||'',order:c.order,createdAt:firebase.firestore.FieldValue.serverTimestamp()}});
+                });
+                Object.keys(mem._d.specialties).forEach(function(oldId){
+                  var s=mem._d.specialties[oldId];
+                  var ref=base.collection('specialties').doc();
+                  idMap[oldId]=ref.id;
+                  ops.push({ref:ref,data:{name:s.name,categoryId:idMap[s.categoryId],order:s.order,template:s.template||[],createdAt:firebase.firestore.FieldValue.serverTimestamp()}});
+                });
+                Object.keys(mem._d.notes).forEach(function(oldId){
+                  var n=mem._d.notes[oldId];
+                  var ref=base.collection('notes').doc();
+                  ops.push({ref:ref,data:{title:n.title,content:n.content,specialtyId:idMap[n.specialtyId],categoryId:idMap[n.categoryId],order:n.order,createdAt:n.createdAt||firebase.firestore.FieldValue.serverTimestamp(),updatedAt:n.updatedAt||firebase.firestore.FieldValue.serverTimestamp()}});
+                });
+                /* Commit in chunks of 400 */
+                for(var i=0;i<ops.length;i+=400){
+                  var batch=db.batch();
+                  ops.slice(i,i+400).forEach(function(op){batch.set(op.ref,op.data);});
+                  await batch.commit();
+                }
+              }
+            }catch(seedErr){ console.log('Seed error: '+seedErr.message); }
+            $('#login-screen').style.display='none'; $('#app').classList.add('active'); loadData(); showView('view-cats');
+          }
           else{ $('#app').classList.remove('active'); $('#login-screen').style.display='flex'; S.unsubs.forEach(f=>f()); S.unsubs=[]; }
         });
       }catch(err){ console.log('Firebase init error: '+err.message); }
