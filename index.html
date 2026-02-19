@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Jeffrey's Dietetics</title>
   <meta name="theme-color" content="#124B34" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#0A3A28" media="(prefers-color-scheme: dark)">
@@ -304,6 +304,10 @@
     .fab:hover { background:var(--c-primary-hover); transform:scale(1.08); }
 
     /* ── EDITOR VIEW ───────────────────────────────── */
+    .zoom-controls { display:flex; align-items:center; gap:2px; flex-shrink:0; }
+    .zoom-btn { width:28px; height:28px; border-radius:6px; display:flex; align-items:center; justify-content:center; color:var(--c-text-secondary); font-size:13px; font-weight:800; transition:all var(--transition); background:var(--c-surface-2); }
+    .zoom-btn:hover { background:var(--c-border); color:var(--c-text); }
+    .zoom-label { font-size:11px; color:var(--c-text-muted); font-weight:700; min-width:32px; text-align:center; }
     .save-status { font-size:12px; display:flex; align-items:center; gap:4px; color:var(--c-text-muted); flex-shrink:0; font-weight:600; }
     .save-status.saving { color:var(--c-accent); }
     .save-status.saved { color:var(--c-primary); }
@@ -566,6 +570,11 @@
         <button class="btn-nav-back" id="back-to-notes"><i class="fas fa-arrow-left"></i> Back</button>
         <span class="nav-title" id="editor-crumb"></span>
         <button class="btn-topbar" id="btn-editor-move" title="Move note"><i class="fas fa-arrow-right-arrow-left"></i></button>
+        <div class="zoom-controls">
+          <button class="zoom-btn" id="zoom-out" title="Zoom out">A-</button>
+          <span class="zoom-label" id="zoom-label">100%</span>
+          <button class="zoom-btn" id="zoom-in" title="Zoom in">A+</button>
+        </div>
         <div class="save-status" id="save-status"></div>
       </div>
       <div class="editor-body">
@@ -9068,7 +9077,7 @@
                   var c=mem._d.categories[oldId];
                   var ref=base.collection('categories').doc();
                   idMap[oldId]=ref.id;
-                  ops.push({ref:ref,data:{name:c.name,sublabel:c.sublabel||'',order:c.order,createdAt:firebase.firestore.FieldValue.serverTimestamp()}});
+                  ops.push({ref:ref,data:{name:c.name,sublabel:c.sublabel||'',order:c.order,template:c.template||[],createdAt:firebase.firestore.FieldValue.serverTimestamp()}});
                 });
                 Object.keys(mem._d.specialties).forEach(function(oldId){
                   var s=mem._d.specialties[oldId];
@@ -9154,11 +9163,13 @@
           '<div class="li-icon cat-icon"><i class="fas fa-folder"></i></div>'+
           '<div class="li-body"><div class="li-name">'+esc(cat.name)+'</div><div class="li-meta">'+specs.length+' '+esc(pluralize(getSublabel(cat),specs.length).toLowerCase())+' &middot; '+totalNotes+' notes</div></div>'+
           '<span class="li-actions">'+
+            '<button class="act-btn" data-a="tpl" title="Edit Template"><i class="fas fa-table-columns"></i></button>'+
             '<button class="act-btn" data-a="ren" title="Rename"><i class="fas fa-pen"></i></button>'+
             '<button class="act-btn danger" data-a="del" title="Delete"><i class="fas fa-trash"></i></button>'+
           '</span>'+
           '<span class="li-arrow"><i class="fas fa-chevron-right"></i></span>';
         row.addEventListener('click',e=>{ if(e.target.closest('[data-a]')) return; S.currentCatId=cat.id; renderSpecs(); showView('view-specs'); });
+        row.querySelector('[data-a="tpl"]').addEventListener('click',()=>openTemplateEditor(null,cat.id));
         row.querySelector('[data-a="ren"]').addEventListener('click',()=>renameItem('categories',cat.id,cat.name));
         row.querySelector('[data-a="del"]').addEventListener('click',()=>deleteCategory(cat.id,cat.name));
         el.appendChild(row);
@@ -9188,7 +9199,7 @@
           '</span>'+
           '<span class="li-arrow"><i class="fas fa-chevron-right"></i></span>';
         row.addEventListener('click',e=>{ if(e.target.closest('[data-a]')) return; S.currentSpecId=spec.id; renderNotes(); showView('view-notes'); });
-        row.querySelector('[data-a="tpl"]').addEventListener('click',()=>openTemplateEditor(spec.id));
+        row.querySelector('[data-a="tpl"]').addEventListener('click',()=>openTemplateEditor(spec.id,null));
         row.querySelector('[data-a="ren"]').addEventListener('click',()=>renameItem('specialties',spec.id,spec.name));
         row.querySelector('[data-a="del"]').addEventListener('click',()=>deleteSpecialty(spec.id,spec.name));
         el.appendChild(row);
@@ -9234,13 +9245,13 @@
       showDialog({ title:'New Category', message:'Enter category name:', input:true, placeholder:'e.g. Clinical Dietetics',
         input2:true, input2label:'What do you call the 2nd layer?', placeholder2:'Specialty', hint2:'e.g. Specialty, Type, Topic',
         confirmText:'Create',
-        onConfirm:(n,sub)=>{ if(n) store.add('categories',{name:n,sublabel:sub||'Specialty',order:S.categories.length}); }});
+        onConfirm:(n,sub)=>{ if(n) store.add('categories',{name:n,sublabel:sub||'Specialty',order:S.categories.length,template:[]}); }});
     }
     function createSpecialty() {
       const cat=S.categories.find(c=>c.id===S.currentCatId);
       const sub=getSublabel(cat);
       showDialog({ title:'New '+sub, message:'Enter '+sub.toLowerCase()+' name:', input:true, placeholder:'e.g. Renal Nutrition', confirmText:'Create',
-        onConfirm:n=>{ if(n) store.add('specialties',{name:n,categoryId:S.currentCatId,order:(S.specialties[S.currentCatId]||[]).length}); }});
+        onConfirm:n=>{ if(n) store.add('specialties',{name:n,categoryId:S.currentCatId,order:(S.specialties[S.currentCatId]||[]).length,template:[]}); }});
     }
     function createNote() { openNewNoteDialog(); }
     function deleteCategory(id,name) {
@@ -9296,7 +9307,7 @@
 
     /* ── Auto-save ────────────────────────────────── */
     let saveTimer=null;
-    function scheduleSave() { if(saveTimer) clearTimeout(saveTimer); $('#save-status').textContent=''; $('#save-status').className='save-status'; saveTimer=setTimeout(saveCurrentNote,1000); }
+    function scheduleSave() { if(saveTimer) clearTimeout(saveTimer); saveTimer=setTimeout(saveCurrentNote,1000); }
     async function saveCurrentNote() {
       if(!S.currentNoteId||!store) return;
       const title=$('#note-title').value.trim()||'Untitled Note';
@@ -9305,11 +9316,54 @@
       ss.innerHTML='<i class="fas fa-circle-notch fa-spin"></i> Saving\u2026'; ss.className='save-status saving';
       try{ await store.update('notes',S.currentNoteId,{title,content});
         ss.innerHTML='<i class="fas fa-check"></i> Saved'; ss.className='save-status saved';
-        setTimeout(()=>{ if(ss.classList.contains('saved')){ss.textContent='';ss.className='save-status';} },2000);
       }catch(e){ ss.innerHTML='<i class="fas fa-exclamation-circle"></i> Error'; ss.className='save-status error'; }
     }
     quill.on('text-change',scheduleSave);
     $('#note-title').addEventListener('input',scheduleSave);
+
+    /* ── Editor zoom (font-size based) ── */
+    (function() {
+      var ZOOM_STEPS = [75, 80, 90, 100, 110, 125, 150, 175, 200];
+      var zoomIdx = 3; /* default 100% */
+      var editor = document.querySelector('.ql-editor');
+      var container = document.querySelector('.ql-container.ql-snow');
+      var label = $('#zoom-label');
+      var baseFontSize = 15; /* matches .ql-container font-size */
+
+      function applyZoom() {
+        var pct = ZOOM_STEPS[zoomIdx];
+        var fs = Math.round(baseFontSize * pct / 100);
+        container.style.fontSize = fs + 'px';
+        label.textContent = pct + '%';
+      }
+
+      $('#zoom-in').addEventListener('click', function() {
+        if (zoomIdx < ZOOM_STEPS.length - 1) { zoomIdx++; applyZoom(); }
+      });
+      $('#zoom-out').addEventListener('click', function() {
+        if (zoomIdx > 0) { zoomIdx--; applyZoom(); }
+      });
+
+      /* Pinch-to-zoom on editor only */
+      var lastDist = 0;
+      container.addEventListener('touchstart', function(e) {
+        if (e.touches.length === 2) {
+          lastDist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+        }
+      }, {passive: true});
+      container.addEventListener('touchmove', function(e) {
+        if (e.touches.length === 2) {
+          var dist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+          if (lastDist > 0) {
+            var ratio = dist / lastDist;
+            if (ratio > 1.15 && zoomIdx < ZOOM_STEPS.length - 1) { zoomIdx++; applyZoom(); lastDist = dist; }
+            else if (ratio < 0.85 && zoomIdx > 0) { zoomIdx--; applyZoom(); lastDist = dist; }
+          }
+          lastDist = dist;
+        }
+      }, {passive: true});
+      container.addEventListener('touchend', function() { lastDist = 0; }, {passive: true});
+    })();
 
     /* ── Intercept pasted/dropped images → compress before insert ── */
     quill.root.addEventListener('paste', function(e) {
@@ -9503,7 +9557,11 @@
       function openNewNoteDialog() {
         var specs = S.specialties[S.currentCatId] || [];
         var specObj = specs.find(function(sp) { return sp.id === S.currentSpecId; });
-        var template = (specObj && Array.isArray(specObj.template)) ? specObj.template : [];
+        var catObj = S.categories.find(function(c) { return c.id === S.currentCatId; });
+        /* Specialty template overrides category template */
+        var specTpl = (specObj && Array.isArray(specObj.template) && specObj.template.length > 0) ? specObj.template : null;
+        var catTpl = (catObj && Array.isArray(catObj.template) && catObj.template.length > 0) ? catObj.template : null;
+        var template = specTpl || catTpl || [];
         nnSecs = template.slice();
 
         nnTitleInput.value = '';
@@ -9756,25 +9814,40 @@
 
     /* ═══ TEMPLATE EDITOR ══════════════════════════════ */
     let tplSpecId = null;
+    let tplCatId = null; /* non-null when editing a category template */
     let tplSections = [];
     const tplOverlay = $('#tpl-overlay');
 
-    function openTemplateEditor(specId) {
-      tplSpecId = specId;
-      let specObj = null;
-      for (const catId of Object.keys(S.specialties)) {
-        const found = (S.specialties[catId]||[]).find(function(sp){ return sp.id === specId; });
-        if (found) { specObj = found; break; }
+    function openTemplateEditor(specId, catId) {
+      tplSpecId = specId || null;
+      tplCatId = catId || null;
+
+      if (tplCatId) {
+        /* Editing category-level template */
+        var catObj = S.categories.find(function(c){ return c.id === tplCatId; });
+        if (!catObj) return;
+        var sub = getSublabel(catObj);
+        $('#tpl-title').textContent = 'Default Template for "' + catObj.name + '"';
+        $('#tpl-subtitle').textContent = 'This template applies to all ' + pluralize(sub,0).toLowerCase() + ' unless they have their own template.';
+        tplSections = Array.isArray(catObj.template) ? catObj.template.slice() : [];
+      } else {
+        /* Editing specialty-level template */
+        var specObj = null;
+        for (var cid of Object.keys(S.specialties)) {
+          var found = (S.specialties[cid]||[]).find(function(sp){ return sp.id === specId; });
+          if (found) { specObj = found; break; }
+        }
+        if (!specObj) return;
+        var cat = S.categories.find(function(c){ return c.id === S.currentCatId; });
+        var sub2 = getSublabel(cat);
+        var catTpl = (cat && Array.isArray(cat.template) && cat.template.length > 0);
+        $('#tpl-title').textContent = 'Template for "' + specObj.name + '"';
+        $('#tpl-subtitle').textContent = catTpl
+          ? 'Overrides the default category template. Clear all sections to fall back to the category template.'
+          : 'Define sections for new notes in this ' + sub2.toLowerCase() + '. Each section becomes a header.';
+        tplSections = Array.isArray(specObj.template) ? specObj.template.slice() : [];
       }
-      if (!specObj) return;
 
-      const cat = S.categories.find(function(c){ return c.id === S.currentCatId; });
-      const sub = getSublabel(cat);
-
-      $('#tpl-title').textContent = 'Template for "' + specObj.name + '"';
-      $('#tpl-subtitle').textContent = 'Define sections for new notes in this ' + sub.toLowerCase() + '. Each section becomes a header.';
-
-      tplSections = Array.isArray(specObj.template) ? specObj.template.slice() : [];
       renderTplRows();
       tplOverlay.classList.add('active');
     }
@@ -9838,19 +9911,24 @@
       if (last) { last.focus(); last.select(); }
     });
 
-    $('#tpl-cancel').addEventListener('click', function() { tplOverlay.classList.remove('active'); tplSpecId = null; });
-    tplOverlay.addEventListener('click', function(e) { if (e.target === tplOverlay) { tplOverlay.classList.remove('active'); tplSpecId = null; } });
+    $('#tpl-cancel').addEventListener('click', function() { tplOverlay.classList.remove('active'); tplSpecId = null; tplCatId = null; });
+    tplOverlay.addEventListener('click', function(e) { if (e.target === tplOverlay) { tplOverlay.classList.remove('active'); tplSpecId = null; tplCatId = null; } });
 
     $('#tpl-save').addEventListener('click', async function() {
-      if (!tplSpecId) return;
+      if (!tplSpecId && !tplCatId) return;
       var cleanSections = tplSections.map(function(s){ return s.trim(); }).filter(function(s){ return s; });
       try {
-        await store.update('specialties', tplSpecId, { template: cleanSections });
+        if (tplCatId) {
+          await store.update('categories', tplCatId, { template: cleanSections });
+        } else {
+          await store.update('specialties', tplSpecId, { template: cleanSections });
+        }
       } catch(err) {
         console.log('Template save error: ' + (err.message || err));
       }
       tplOverlay.classList.remove('active');
       tplSpecId = null;
+      tplCatId = null;
     });
 
     /* ═══ AI IMPORT ════════════════════════════════════ */
