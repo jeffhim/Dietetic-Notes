@@ -488,9 +488,32 @@
     .btn-dialog-confirm:hover { background:var(--c-primary-hover); }
     .btn-dialog-danger { color:#FFF; background:var(--c-danger); }
     .btn-dialog-danger:hover { background:var(--c-danger-hover); }
+
+    /* ── SEED OVERLAY ──────────────────────────────── */
+    #seed-overlay { display:none; position:fixed; inset:0; background:rgba(7,11,20,0.92); z-index:2000; align-items:center; justify-content:center; flex-direction:column; gap:18px; }
+    #seed-overlay.active { display:flex; animation:fadeIn .2s ease; }
+    .seed-spinner { width:44px; height:44px; border:3.5px solid rgba(45,212,191,0.15); border-top-color:var(--c-primary); border-radius:50%; animation:spin .8s linear infinite; }
+    @keyframes spin { to{transform:rotate(360deg)} }
+    .seed-text { color:#E2E8F0; font-size:15px; font-weight:600; text-align:center; line-height:1.6; }
+    .seed-sub { color:rgba(255,255,255,0.4); font-size:13px; }
+
+    /* ── TOAST ─────────────────────────────────────── */
+    #toast { position:fixed; top:20px; left:50%; transform:translateX(-50%) translateY(-100px); z-index:3000; padding:14px 22px; border-radius:var(--radius-md); font-size:14px; font-weight:600; box-shadow:var(--shadow-lg); transition:transform .35s cubic-bezier(.4,0,.2,1), opacity .35s ease; opacity:0; pointer-events:none; max-width:90%; text-align:center; }
+    #toast.show { transform:translateX(-50%) translateY(0); opacity:1; }
+    #toast.success { background:#0D4A3A; color:#2DD4BF; border:1px solid rgba(45,212,191,0.3); }
+    #toast.error { background:#4A1A1A; color:#F1948A; border:1px solid rgba(241,148,138,0.3); }
   </style>
 </head>
 <body>
+
+  <!-- SEED OVERLAY -->
+  <div id="seed-overlay">
+    <div class="seed-spinner"></div>
+    <div class="seed-text">Uploading notes to Firebase&hellip;<br><span class="seed-sub">First-time setup &middot; please wait</span></div>
+  </div>
+
+  <!-- TOAST -->
+  <div id="toast"></div>
 
   <!-- LOGIN -->
   <div id="login-screen">
@@ -666,6 +689,7 @@
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-storage-compat.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.js"></script>
   <script>
     /* ── Dark mode ────────────────────────────────── */
@@ -8832,6 +8856,25 @@
     imgFileInput.style.display = 'none';
     document.body.appendChild(imgFileInput);
 
+    /* ── Upload image to Firebase Storage, return download URL ── */
+    async function uploadImageToStorage(file) {
+      var user = firebase.auth().currentUser;
+      if (!user) throw new Error('Not signed in');
+      var ext = file.name.split('.').pop() || 'png';
+      var path = 'users/' + user.uid + '/images/' + Date.now() + '_' + Math.random().toString(36).slice(2,8) + '.' + ext;
+      var ref = firebase.storage().ref(path);
+      await ref.put(file);
+      return await ref.getDownloadURL();
+    }
+
+    /* ── Convert base64 data URL to File object ── */
+    function dataURLtoFile(dataURL, filename) {
+      var arr = dataURL.split(','), mime = arr[0].match(/:(.*?);/)[1];
+      var bstr = atob(arr[1]), n = bstr.length, u8 = new Uint8Array(n);
+      while(n--) u8[n] = bstr.charCodeAt(n);
+      return new File([u8], filename, {type: mime});
+    }
+
     function showImagePickerDialog() {
       var dlgO = document.getElementById('dialog-overlay');
       document.getElementById('dialog-title').textContent = 'Insert Image';
@@ -8850,7 +8893,7 @@
       uploadBtn.innerHTML = '<i class="fas fa-cloud-arrow-up"></i> Upload from device';
       uploadBtn.onclick = function() {
         imgFileInput.value = '';
-        imgFileInput.onchange = function() {
+        imgFileInput.onchange = async function() {
           if (!imgFileInput.files || !imgFileInput.files[0]) return;
           var file = imgFileInput.files[0];
           if (file.size > 5 * 1024 * 1024) {
@@ -8858,21 +8901,21 @@
             statusEl.style.color = 'var(--c-danger)';
             return;
           }
-          statusEl.textContent = 'Reading image\u2026';
+          statusEl.textContent = 'Uploading image\u2026';
           statusEl.style.color = 'var(--c-primary)';
-          var reader = new FileReader();
-          reader.onload = function(e) {
+          uploadBtn.style.pointerEvents = 'none'; uploadBtn.style.opacity = '0.5';
+          try {
+            var url = await uploadImageToStorage(file);
             dlgO.classList.remove('active');
             var range = quill.getSelection(true);
-            quill.insertEmbed(range.index, 'image', e.target.result, 'user');
+            quill.insertEmbed(range.index, 'image', url, 'user');
             quill.setSelection(range.index + 1, 0, 'silent');
             quill.focus();
-          };
-          reader.onerror = function() {
-            statusEl.textContent = 'Failed to read image';
+          } catch(err) {
+            statusEl.textContent = 'Upload failed: ' + err.message;
             statusEl.style.color = 'var(--c-danger)';
-          };
-          reader.readAsDataURL(file);
+            uploadBtn.style.pointerEvents = ''; uploadBtn.style.opacity = '';
+          }
         };
         imgFileInput.click();
       };
@@ -8979,6 +9022,12 @@
     $('#dialog-input').addEventListener('keydown',e=>{ if(e.key==='Enter'){ if($('#dialog-input2').style.display!=='none'){$('#dialog-input2').focus();} else{const b=$('#dialog-box').querySelector('.btn-dialog-confirm,.btn-dialog-danger'); if(b)b.click();} }});
     $('#dialog-input2').addEventListener('keydown',e=>{ if(e.key==='Enter'){ const b=$('#dialog-box').querySelector('.btn-dialog-confirm,.btn-dialog-danger'); if(b)b.click(); }});
 
+    /* ── Toast helper ────────────────────────────────── */
+    function showToast(msg, type, duration) {
+      var t=$('#toast'); t.textContent=msg; t.className=type; void t.offsetWidth; t.classList.add('show');
+      setTimeout(function(){ t.classList.remove('show'); }, duration||3500);
+    }
+
     /* ── Firebase auto-init ─────────────────────────── */
     var FIREBASE_CONFIG = {
       apiKey: "AIzaSyAAlS2pDwWaMrzmklGyiyQ21hsk_79rfBg",
@@ -9000,14 +9049,17 @@
           if(u){
             store=new FirebaseStore(firebase.firestore(),u.uid);
             /* Seed Firebase if empty (first login) */
+            var didSeed=false;
             try{
               var snap=await firebase.firestore().collection('users').doc(u.uid).collection('categories').limit(1).get();
               if(snap.empty){
+                didSeed=true;
+                $('#login-screen').style.display='none';
+                $('#seed-overlay').classList.add('active');
                 var mem=new InMemoryStore();
                 var db=firebase.firestore();
                 var base=db.collection('users').doc(u.uid);
                 var idMap={};
-                /* Write in batches of 400 (Firestore limit is 500 per batch) */
                 var ops=[];
                 Object.keys(mem._d.categories).forEach(function(oldId){
                   var c=mem._d.categories[oldId];
@@ -9026,14 +9078,19 @@
                   var ref=base.collection('notes').doc();
                   ops.push({ref:ref,data:{title:n.title,content:n.content,specialtyId:idMap[n.specialtyId],categoryId:idMap[n.categoryId],order:n.order,createdAt:n.createdAt||firebase.firestore.FieldValue.serverTimestamp(),updatedAt:n.updatedAt||firebase.firestore.FieldValue.serverTimestamp()}});
                 });
-                /* Commit in chunks of 400 */
                 for(var i=0;i<ops.length;i+=400){
                   var batch=db.batch();
                   ops.slice(i,i+400).forEach(function(op){batch.set(op.ref,op.data);});
                   await batch.commit();
                 }
+                $('#seed-overlay').classList.remove('active');
+                showToast('\u2705 Successfully uploaded '+ops.length+' items to Firebase','success');
               }
-            }catch(seedErr){ console.log('Seed error: '+seedErr.message); }
+            }catch(seedErr){
+              $('#seed-overlay').classList.remove('active');
+              showToast('\u274C Upload failed: '+seedErr.message,'error',6000);
+              console.log('Seed error: '+seedErr.message);
+            }
             $('#login-screen').style.display='none'; $('#app').classList.add('active'); loadData(); showView('view-cats');
           }
           else{ $('#app').classList.remove('active'); $('#login-screen').style.display='flex'; S.unsubs.forEach(f=>f()); S.unsubs=[]; }
@@ -9250,6 +9307,56 @@
     }
     quill.on('text-change',scheduleSave);
     $('#note-title').addEventListener('input',scheduleSave);
+
+    /* ── Intercept pasted/dropped base64 images → upload to Storage ── */
+    quill.root.addEventListener('paste', function(e) {
+      var cd = e.clipboardData;
+      if (!cd || !cd.items) return;
+      for (var i = 0; i < cd.items.length; i++) {
+        if (cd.items[i].type.indexOf('image') === 0) {
+          e.preventDefault();
+          var file = cd.items[i].getAsFile();
+          if (!file) return;
+          (async function() {
+            var range = quill.getSelection(true);
+            /* Insert a placeholder */
+            quill.insertText(range.index, ' \u23F3 Uploading image\u2026 ', {background:'#FEF3C7',color:'#92400E'}, 'user');
+            try {
+              var url = await uploadImageToStorage(file);
+              /* Remove placeholder and insert image */
+              quill.deleteText(range.index, 22, 'user');
+              quill.insertEmbed(range.index, 'image', url, 'user');
+              quill.setSelection(range.index + 1, 0, 'silent');
+            } catch(err) {
+              quill.deleteText(range.index, 22, 'user');
+              quill.insertText(range.index, '[Image upload failed: '+err.message+']', {color:'#DC2626'}, 'user');
+            }
+          })();
+          return;
+        }
+      }
+    });
+
+    /* ── Also intercept drop events ── */
+    quill.root.addEventListener('drop', function(e) {
+      if (!e.dataTransfer || !e.dataTransfer.files || !e.dataTransfer.files.length) return;
+      var file = e.dataTransfer.files[0];
+      if (!file || file.type.indexOf('image') !== 0) return;
+      e.preventDefault();
+      (async function() {
+        var range = quill.getSelection(true) || {index: quill.getLength()};
+        quill.insertText(range.index, ' \u23F3 Uploading image\u2026 ', {background:'#FEF3C7',color:'#92400E'}, 'user');
+        try {
+          var url = await uploadImageToStorage(file);
+          quill.deleteText(range.index, 22, 'user');
+          quill.insertEmbed(range.index, 'image', url, 'user');
+          quill.setSelection(range.index + 1, 0, 'silent');
+        } catch(err) {
+          quill.deleteText(range.index, 22, 'user');
+          quill.insertText(range.index, '[Image upload failed: '+err.message+']', {color:'#DC2626'}, 'user');
+        }
+      })();
+    });
 
     /* ═══ IMAGE RESIZE ═════════════════════════════════ */
     (function() {
