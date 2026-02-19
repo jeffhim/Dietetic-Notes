@@ -317,6 +317,9 @@
     #note-title { width:100%; border:none; outline:none; font-family:var(--font-main); font-size:24px; font-weight:800; color:var(--c-text); background:transparent; padding:0; }
     #note-title::placeholder { color:var(--c-text-muted); }
     .note-meta { padding:4px 20px 12px; font-size:12px; color:var(--c-text-muted); font-weight:500; }
+    .btn-add-section { display:flex; align-items:center; gap:6px; margin:0 20px 8px; padding:7px 14px; border-radius:var(--radius-sm); background:rgba(45,212,191,0.08); color:var(--c-primary); font-size:13px; font-weight:600; transition:all var(--transition); flex-shrink:0; }
+    .btn-add-section:hover { background:rgba(45,212,191,0.16); }
+    .btn-add-section i { font-size:11px; }
     .editor-quill { flex:1; display:flex; flex-direction:column; overflow:hidden; position:relative; }
     .ql-toolbar.ql-snow { border:none !important; border-top:1px solid var(--c-border) !important; border-bottom:1px solid var(--c-border) !important; background:var(--c-surface-2); padding:5px 16px !important; flex-shrink:0; }
     .ql-container.ql-snow { border:none !important; flex:1; overflow-y:auto; font-family:var(--font-main); font-size:15px; position:relative; }
@@ -580,6 +583,7 @@
       <div class="editor-body">
         <div class="note-title-wrap"><input type="text" id="note-title" placeholder="Untitled Note"></div>
         <div class="note-meta" id="note-meta"></div>
+        <button class="btn-add-section" id="btn-add-section"><i class="fas fa-plus"></i> Add Section</button>
         <div class="editor-quill"><div id="quill-editor"></div></div>
       </div>
     </div>
@@ -9342,6 +9346,27 @@
     }
     quill.on('text-change',scheduleSave);
     $('#note-title').addEventListener('input',scheduleSave);
+
+    /* ── Add Section button ── */
+    $('#btn-add-section').addEventListener('click', function() {
+      showDialog({ title:'Add Section', message:'Enter section heading:', input:true, placeholder:'e.g. Dietetic Assessment', confirmText:'Add',
+        onConfirm:function(name) {
+          if (!name) return;
+          var len = quill.getLength();
+          /* Insert a newline first if editor isn't empty, then the heading */
+          var insertAt = len - 1;
+          if (insertAt < 0) insertAt = 0;
+          quill.insertText(insertAt, '\n', 'user');
+          quill.insertText(insertAt + 1, name, 'user');
+          quill.formatLine(insertAt + 1, name.length, 'header', 2, 'user');
+          /* Move cursor after the heading */
+          var newPos = insertAt + 1 + name.length;
+          quill.insertText(newPos, '\n', 'user');
+          quill.setSelection(newPos + 1, 0, 'user');
+          quill.focus();
+        }
+      });
+    });
 
     /* ── Editor zoom (font-size based) ── */
     (function() {
