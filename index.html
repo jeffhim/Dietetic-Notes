@@ -689,7 +689,6 @@
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-storage-compat.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.js"></script>
   <script>
     /* ── Dark mode ────────────────────────────────── */
@@ -8856,23 +8855,27 @@
     imgFileInput.style.display = 'none';
     document.body.appendChild(imgFileInput);
 
-    /* ── Upload image to Firebase Storage, return download URL ── */
-    async function uploadImageToStorage(file) {
-      var user = firebase.auth().currentUser;
-      if (!user) throw new Error('Not signed in');
-      var ext = file.name.split('.').pop() || 'png';
-      var path = 'users/' + user.uid + '/images/' + Date.now() + '_' + Math.random().toString(36).slice(2,8) + '.' + ext;
-      var ref = firebase.storage().ref(path);
-      await ref.put(file);
-      return await ref.getDownloadURL();
-    }
-
-    /* ── Convert base64 data URL to File object ── */
-    function dataURLtoFile(dataURL, filename) {
-      var arr = dataURL.split(','), mime = arr[0].match(/:(.*?);/)[1];
-      var bstr = atob(arr[1]), n = bstr.length, u8 = new Uint8Array(n);
-      while(n--) u8[n] = bstr.charCodeAt(n);
-      return new File([u8], filename, {type: mime});
+    /* ── Compress image file → base64 data URL (max 800px, JPEG q0.6) ── */
+    function compressImage(file, maxW, quality) {
+      maxW = maxW || 800; quality = quality || 0.6;
+      return new Promise(function(resolve, reject) {
+        var reader = new FileReader();
+        reader.onerror = function() { reject(new Error('Failed to read image')); };
+        reader.onload = function(e) {
+          var img = new Image();
+          img.onerror = function() { reject(new Error('Invalid image')); };
+          img.onload = function() {
+            var w = img.width, h = img.height;
+            if (w > maxW) { h = Math.round(h * maxW / w); w = maxW; }
+            var cvs = document.createElement('canvas');
+            cvs.width = w; cvs.height = h;
+            cvs.getContext('2d').drawImage(img, 0, 0, w, h);
+            resolve(cvs.toDataURL('image/jpeg', quality));
+          };
+          img.src = e.target.result;
+        };
+        reader.readAsDataURL(file);
+      });
     }
 
     function showImagePickerDialog() {
@@ -8896,23 +8899,23 @@
         imgFileInput.onchange = async function() {
           if (!imgFileInput.files || !imgFileInput.files[0]) return;
           var file = imgFileInput.files[0];
-          if (file.size > 5 * 1024 * 1024) {
-            statusEl.textContent = 'Image too large (max 5 MB)';
+          if (file.size > 10 * 1024 * 1024) {
+            statusEl.textContent = 'Image too large (max 10 MB)';
             statusEl.style.color = 'var(--c-danger)';
             return;
           }
-          statusEl.textContent = 'Uploading image\u2026';
+          statusEl.textContent = 'Compressing image\u2026';
           statusEl.style.color = 'var(--c-primary)';
           uploadBtn.style.pointerEvents = 'none'; uploadBtn.style.opacity = '0.5';
           try {
-            var url = await uploadImageToStorage(file);
+            var dataUrl = await compressImage(file);
             dlgO.classList.remove('active');
             var range = quill.getSelection(true);
-            quill.insertEmbed(range.index, 'image', url, 'user');
+            quill.insertEmbed(range.index, 'image', dataUrl, 'user');
             quill.setSelection(range.index + 1, 0, 'silent');
             quill.focus();
           } catch(err) {
-            statusEl.textContent = 'Upload failed: ' + err.message;
+            statusEl.textContent = 'Failed: ' + err.message;
             statusEl.style.color = 'var(--c-danger)';
             uploadBtn.style.pointerEvents = ''; uploadBtn.style.opacity = '';
           }
@@ -9308,7 +9311,7 @@
     quill.on('text-change',scheduleSave);
     $('#note-title').addEventListener('input',scheduleSave);
 
-    /* ── Intercept pasted/dropped base64 images → upload to Storage ── */
+    /* ── Intercept pasted/dropped images → compress before insert ── */
     quill.root.addEventListener('paste', function(e) {
       var cd = e.clipboardData;
       if (!cd || !cd.items) return;
@@ -9319,17 +9322,12 @@
           if (!file) return;
           (async function() {
             var range = quill.getSelection(true);
-            /* Insert a placeholder */
-            quill.insertText(range.index, ' \u23F3 Uploading image\u2026 ', {background:'#FEF3C7',color:'#92400E'}, 'user');
             try {
-              var url = await uploadImageToStorage(file);
-              /* Remove placeholder and insert image */
-              quill.deleteText(range.index, 22, 'user');
-              quill.insertEmbed(range.index, 'image', url, 'user');
+              var dataUrl = await compressImage(file);
+              quill.insertEmbed(range.index, 'image', dataUrl, 'user');
               quill.setSelection(range.index + 1, 0, 'silent');
             } catch(err) {
-              quill.deleteText(range.index, 22, 'user');
-              quill.insertText(range.index, '[Image upload failed: '+err.message+']', {color:'#DC2626'}, 'user');
+              quill.insertText(range.index, '[Image failed: '+err.message+']', {color:'#DC2626'}, 'user');
             }
           })();
           return;
@@ -9337,7 +9335,6 @@
       }
     });
 
-    /* ── Also intercept drop events ── */
     quill.root.addEventListener('drop', function(e) {
       if (!e.dataTransfer || !e.dataTransfer.files || !e.dataTransfer.files.length) return;
       var file = e.dataTransfer.files[0];
@@ -9345,15 +9342,12 @@
       e.preventDefault();
       (async function() {
         var range = quill.getSelection(true) || {index: quill.getLength()};
-        quill.insertText(range.index, ' \u23F3 Uploading image\u2026 ', {background:'#FEF3C7',color:'#92400E'}, 'user');
         try {
-          var url = await uploadImageToStorage(file);
-          quill.deleteText(range.index, 22, 'user');
-          quill.insertEmbed(range.index, 'image', url, 'user');
+          var dataUrl = await compressImage(file);
+          quill.insertEmbed(range.index, 'image', dataUrl, 'user');
           quill.setSelection(range.index + 1, 0, 'silent');
         } catch(err) {
-          quill.deleteText(range.index, 22, 'user');
-          quill.insertText(range.index, '[Image upload failed: '+err.message+']', {color:'#DC2626'}, 'user');
+          quill.insertText(range.index, '[Image failed: '+err.message+']', {color:'#DC2626'}, 'user');
         }
       })();
     });
