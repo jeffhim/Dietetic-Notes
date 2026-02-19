@@ -9348,18 +9348,19 @@
     $('#note-title').addEventListener('input',scheduleSave);
 
     /* ── Add Section button ── */
+    var addSecCursorPos = null;
     $('#btn-add-section').addEventListener('click', function() {
+      /* Remember cursor position before dialog opens */
+      var sel = quill.getSelection();
+      addSecCursorPos = sel ? sel.index : null;
       showDialog({ title:'Add Section', message:'Enter section heading:', input:true, placeholder:'e.g. Dietetic Assessment', confirmText:'Add',
         onConfirm:function(name) {
           if (!name) return;
-          var len = quill.getLength();
-          /* Insert a newline first if editor isn't empty, then the heading */
-          var insertAt = len - 1;
-          if (insertAt < 0) insertAt = 0;
+          /* Insert at cursor position, or end if no cursor */
+          var insertAt = (addSecCursorPos !== null) ? addSecCursorPos : Math.max(quill.getLength() - 1, 0);
           quill.insertText(insertAt, '\n', 'user');
           quill.insertText(insertAt + 1, name, 'user');
           quill.formatLine(insertAt + 1, name.length, 'header', 2, 'user');
-          /* Move cursor after the heading */
           var newPos = insertAt + 1 + name.length;
           quill.insertText(newPos, '\n', 'user');
           quill.setSelection(newPos + 1, 0, 'user');
