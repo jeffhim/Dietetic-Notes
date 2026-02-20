@@ -8526,7 +8526,9 @@
         container:[
           [{header:[1,2,3,false]}],['bold','italic','underline','strike'],
           [{color:[]},{background:[]}],[{list:'ordered'},{list:'bullet'}],
-          ['blockquote','code-block'],['link','image'],['table-insert'],['clean']
+          [{indent:'-1'},{indent:'+1'}],
+          ['blockquote','code-block'],['link','image'],['table-insert'],['clean'],
+          ['undo','redo']
         ],
         handlers:{}
       }}
@@ -8564,6 +8566,16 @@
 
       /* ── Table insert button: replace Quill default with SVG icon ── */
       toolbar.addHandler('table-insert', function() { /* handled by click below */ });
+
+      /* ── Undo / Redo ── */
+      toolbar.addHandler('undo', function() { quill.history.undo(); });
+      toolbar.addHandler('redo', function() { quill.history.redo(); });
+
+      /* Replace undo/redo button content with icons */
+      var undoBtn = document.querySelector('.ql-undo');
+      if (undoBtn) { undoBtn.innerHTML = '<svg viewBox="0 0 18 18"><polyline points="6 8 2 4 6 0" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M2 4h9a5 5 0 0 1 0 10H8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>'; undoBtn.title = 'Undo'; }
+      var redoBtn = document.querySelector('.ql-redo');
+      if (redoBtn) { redoBtn.innerHTML = '<svg viewBox="0 0 18 18"><polyline points="12 8 16 4 12 0" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M16 4H7a5 5 0 0 0 0 10h3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>'; redoBtn.title = 'Redo'; }
     })();
 
     /* ═══ TABLE INSERT & CONTEXT MENU ═══════════════════ */
