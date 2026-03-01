@@ -2518,84 +2518,35 @@
     $('#back-to-specs').addEventListener('click',()=>{ $('#search-specs').value=''; showView('view-specs'); });
     $('#back-to-notes').addEventListener('click',()=>{ saveCurrentNote(); S.currentNoteId=null; $('#search-notes').value=''; showView('view-notes'); });
 
-    /* ── Search filtering ─────────────────────────── */
-    $('#search-cats').addEventListener('input', function() {
-      var q = this.value.trim().toLowerCase();
-      var items = document.querySelectorAll('#cats-list .list-item');
-      items.forEach(function(row) {
-        var name = row.querySelector('.li-name');
-        var text = name ? name.textContent.toLowerCase() : '';
-        row.style.display = (!q || text.indexOf(q) !== -1) ? '' : 'none';
-      });
-    });
-    $('#search-specs').addEventListener('input', function() {
-      var q = this.value.trim().toLowerCase();
-      var items = document.querySelectorAll('#specs-list .list-item');
-      items.forEach(function(row) {
-        var name = row.querySelector('.li-name');
-        var text = name ? name.textContent.toLowerCase() : '';
-        row.style.display = (!q || text.indexOf(q) !== -1) ? '' : 'none';
-      });
-    });
-    $('#search-notes').addEventListener('input', function() {
-      var q = this.value.trim().toLowerCase();
-      var items = document.querySelectorAll('#notes-list .note-card');
-      items.forEach(function(card) {
-        var title = card.querySelector('.nc-title');
-        var preview = card.querySelector('.nc-preview');
-        var tag = card.querySelector('.nc-tag');
-        var text = ((title ? title.textContent : '') + ' ' + (preview ? preview.textContent : '') + ' ' + (tag ? tag.textContent : '')).toLowerCase();
-        card.style.display = (!q || text.indexOf(q) !== -1) ? '' : 'none';
-      });
-    });
+    /* ── Search listeners ─────────────────────────── */
+    $('#search-cats').addEventListener('input', renderCats);
+    $('#search-specs').addEventListener('input', renderSpecs);
+    $('#search-notes').addEventListener('input', renderNotes);
 
-    /* ── Swipe-right to go back ───────────────────── */
-    (function() {
-      var swipeStartX = 0;
-      var swipeStartY = 0;
-      var swiping = false;
-      var SWIPE_THRESHOLD = 80;
-      var MAX_Y_DRIFT = 60;
-
-      function getActiveView() {
-        for (var i = 0; i < views.length; i++) {
-          if ($('#' + views[i]).classList.contains('active')) return views[i];
-        }
-        return null;
-      }
-
-      function goBack(viewId) {
-        if (viewId === 'view-specs') { $('#search-cats').value=''; showView('view-cats'); }
-        else if (viewId === 'view-notes') { $('#search-specs').value=''; showView('view-specs'); }
-        else if (viewId === 'view-editor') { saveCurrentNote(); S.currentNoteId=null; $('#search-notes').value=''; showView('view-notes'); }
-      }
-
-      document.getElementById('app').addEventListener('touchstart', function(e) {
-        var t = e.touches[0];
-        if (t.clientX < 40) {
-          swipeStartX = t.clientX;
-          swipeStartY = t.clientY;
-          swiping = true;
-        }
-      }, { passive: true });
-
-      document.getElementById('app').addEventListener('touchmove', function(e) {
-        if (!swiping) return;
-      }, { passive: true });
-
-      document.getElementById('app').addEventListener('touchend', function(e) {
-        if (!swiping) return;
-        swiping = false;
-        var t = e.changedTouches[0];
-        var dx = t.clientX - swipeStartX;
-        var dy = Math.abs(t.clientY - swipeStartY);
-        if (dx > SWIPE_THRESHOLD && dy < MAX_Y_DRIFT) {
-          var active = getActiveView();
-          if (active && active !== 'view-cats') {
-            goBack(active);
-          }
-        }
-      }, { passive: true });
+    /* ── Swipe right to go back ───────────────────── */
+    (function(){
+      var sx=0, sy=0, tracking=false;
+      var currentView=function(){ return document.querySelector('.view.active'); };
+      document.getElementById('app').addEventListener('touchstart',function(e){
+        if(e.touches.length!==1) return;
+        sx=e.touches[0].clientX; sy=e.touches[0].clientY; tracking=true;
+      },{passive:true});
+      document.getElementById('app').addEventListener('touchmove',function(e){
+        if(!tracking||e.touches.length!==1) return;
+        var dx=e.touches[0].clientX-sx, dy=e.touches[0].clientY-sy;
+        if(Math.abs(dy)>Math.abs(dx)){ tracking=false; }
+      },{passive:true});
+      document.getElementById('app').addEventListener('touchend',function(e){
+        if(!tracking) return; tracking=false;
+        var ex=e.changedTouches[0].clientX, dx=ex-sx;
+        if(dx<80) return; /* need at least 80px swipe */
+        var v=currentView();
+        if(!v) return;
+        var vid=v.id;
+        if(vid==='view-editor'){ saveCurrentNote(); S.currentNoteId=null; $('#search-notes').value=''; showView('view-notes'); }
+        else if(vid==='view-notes'){ $('#search-specs').value=''; showView('view-specs'); }
+        else if(vid==='view-specs'){ $('#search-cats').value=''; showView('view-cats'); }
+      },{passive:true});
     })();
 
     /* ── Load Data ────────────────────────────────── */
@@ -2625,8 +2576,11 @@
     /* ═══ RENDER ══════════════════════════════════════ */
     function renderCats() {
       const el=$('#cats-list'); el.innerHTML='';
+      var q=($('#search-cats').value||'').toLowerCase().trim();
+      var filtered=S.categories.filter(function(cat){ return !q||cat.name.toLowerCase().indexOf(q)>=0; });
       if(S.categories.length===0){ el.innerHTML='<div class="empty-list"><div class="ei">📁</div><h3>No categories yet</h3><p>Tap + to create your first category.</p></div>'; return; }
-      S.categories.forEach(cat=>{
+      if(filtered.length===0){ el.innerHTML='<div class="empty-list"><div class="ei">🔍</div><h3>No results</h3><p>No categories match your search.</p></div>'; return; }
+      filtered.forEach(cat=>{
         const specs=S.specialties[cat.id]||[];
         const totalNotes = specs.reduce((sum,sp)=>(S.notes[sp.id]||[]).length+sum,0);
         const row=document.createElement('div'); row.className='list-item';
@@ -2639,7 +2593,7 @@
             '<button class="act-btn danger" data-a="del" title="Delete"><i class="fas fa-trash"></i></button>'+
           '</span>'+
           '<span class="li-arrow"><i class="fas fa-chevron-right"></i></span>';
-        row.addEventListener('click',e=>{ if(e.target.closest('[data-a]')) return; S.currentCatId=cat.id; $('#search-specs').value=''; renderSpecs(); showView('view-specs'); });
+        row.addEventListener('click',e=>{ if(e.target.closest('[data-a]')) return; S.currentCatId=cat.id; renderSpecs(); showView('view-specs'); });
         row.querySelector('[data-a="tpl"]').addEventListener('click',()=>openTemplateEditor(null,cat.id));
         row.querySelector('[data-a="ren"]').addEventListener('click',()=>renameItem('categories',cat.id,cat.name));
         row.querySelector('[data-a="del"]').addEventListener('click',()=>deleteCategory(cat.id,cat.name));
@@ -2654,9 +2608,12 @@
       const sub = getSublabel(cat);
       $('#specs-title').textContent=cat.name;
       const specs = S.specialties[S.currentCatId]||[];
+      var q2=($('#search-specs').value||'').toLowerCase().trim();
+      var filteredSpecs=specs.filter(function(sp){ return !q2||sp.name.toLowerCase().indexOf(q2)>=0; });
       const el=$('#specs-list'); el.innerHTML='';
       if(specs.length===0){ el.innerHTML='<div class="empty-list"><div class="ei">🔖</div><h3>No '+esc(pluralize(sub,0).toLowerCase())+' yet</h3><p>Tap + to add a '+esc(sub.toLowerCase())+'.</p></div>'; return; }
-      specs.forEach(spec=>{
+      if(filteredSpecs.length===0){ el.innerHTML='<div class="empty-list"><div class="ei">🔍</div><h3>No results</h3><p>No '+esc(pluralize(sub,0).toLowerCase())+' match your search.</p></div>'; return; }
+      filteredSpecs.forEach(spec=>{
         const nl=S.notes[spec.id]||[];
         const metaParts = [nl.length+' notes'];
         const row=document.createElement('div'); row.className='list-item';
@@ -2669,7 +2626,7 @@
             '<button class="act-btn danger" data-a="del" title="Delete"><i class="fas fa-trash"></i></button>'+
           '</span>'+
           '<span class="li-arrow"><i class="fas fa-chevron-right"></i></span>';
-        row.addEventListener('click',e=>{ if(e.target.closest('[data-a]')) return; S.currentSpecId=spec.id; $('#search-notes').value=''; renderNotes(); showView('view-notes'); });
+        row.addEventListener('click',e=>{ if(e.target.closest('[data-a]')) return; S.currentSpecId=spec.id; renderNotes(); showView('view-notes'); });
         row.querySelector('[data-a="tpl"]').addEventListener('click',()=>openTemplateEditor(spec.id,null));
         row.querySelector('[data-a="ren"]').addEventListener('click',()=>renameItem('specialties',spec.id,spec.name));
         row.querySelector('[data-a="del"]').addEventListener('click',()=>deleteSpecialty(spec.id,spec.name));
@@ -2685,9 +2642,12 @@
       if(!specObj) return;
       $('#notes-title').textContent=specObj.name;
       const nl=S.notes[S.currentSpecId]||[];
+      var q3=($('#search-notes').value||'').toLowerCase().trim();
+      var filteredNotes=nl.filter(function(n){ return !q3||(n.title||'').toLowerCase().indexOf(q3)>=0; });
       const el=$('#notes-list'); el.innerHTML='';
       if(nl.length===0){ el.innerHTML='<div class="empty-list"><div class="ei">📝</div><h3>No notes yet</h3><p>Tap + to create a note.</p></div>'; return; }
-      nl.forEach(note=>{
+      if(filteredNotes.length===0){ el.innerHTML='<div class="empty-list"><div class="ei">🔍</div><h3>No results</h3><p>No notes match your search.</p></div>'; return; }
+      filteredNotes.forEach(note=>{
         const preview = stripHtml(note.content);
         const tagName = specObj ? specObj.name : '';
         const card=document.createElement('div'); card.className='note-card';
