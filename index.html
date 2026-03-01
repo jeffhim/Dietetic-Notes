@@ -124,6 +124,24 @@
     .search-wrap { position:relative; }
     .search-wrap i { position:absolute; left:28px; top:50%; transform:translateY(-50%); color:var(--c-text-muted); font-size:13px; pointer-events:none; }
 
+    /* ── GLOBAL SEARCH RESULTS ────────────────────── */
+    .gs-section { margin-bottom:8px; }
+    .gs-header { display:flex; align-items:center; gap:8px; padding:10px 6px 6px; font-size:11px; font-weight:800; letter-spacing:0.08em; text-transform:uppercase; color:var(--c-text-muted); }
+    .gs-header i { font-size:12px; opacity:0.7; }
+    .gs-header::after { content:''; flex:1; height:1px; background:var(--c-border); }
+    .gs-item { display:flex; align-items:center; gap:12px; padding:12px 14px; margin-bottom:4px; border-radius:var(--radius-md); background:var(--c-surface); border:1px solid var(--c-border); cursor:pointer; transition:all var(--transition); box-shadow:var(--shadow-sm); }
+    .gs-item:hover { box-shadow:var(--shadow-md); border-color:var(--c-primary); }
+    .gs-item:active { transform:scale(0.99); }
+    .gs-item .gs-icon { width:36px; height:36px; border-radius:9px; display:flex; align-items:center; justify-content:center; font-size:14px; flex-shrink:0; }
+    .gs-icon.gs-cat { background:rgba(45,212,191,0.12); color:var(--c-primary); }
+    .gs-icon.gs-spec { background:rgba(45,212,191,0.08); color:var(--c-primary); }
+    .gs-icon.gs-note { background:rgba(243,156,18,0.10); color:#f39c12; }
+    .gs-item .gs-body { flex:1; min-width:0; }
+    .gs-item .gs-name { font-weight:700; font-size:14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--c-text); }
+    .gs-item .gs-name mark { background:rgba(45,212,191,0.25); color:inherit; border-radius:2px; padding:0 1px; }
+    .gs-item .gs-crumb { font-size:11.5px; color:var(--c-text-muted); margin-top:1px; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .gs-item .gs-arrow { color:var(--c-text-muted); font-size:12px; flex-shrink:0; }
+
     /* ── LIST VIEW (shared by categories / specs) ─── */
     .list-scroll { flex:1; overflow-y:auto; padding:12px; }
     .list-item {
@@ -504,7 +522,7 @@
         <span class="nav-title">Jeffrey's Dietetics</span>
         <button class="btn-topbar" id="btn-signout" title="Sign out"><i class="fas fa-right-from-bracket"></i></button>
       </div>
-      <div class="search-wrap"><i class="fas fa-magnifying-glass"></i><input type="text" class="search-input" id="search-cats" placeholder="Search categories\u2026"></div>
+      <div class="search-wrap"><i class="fas fa-magnifying-glass"></i><input type="text" class="search-input" id="search-cats" placeholder="Search everything\u2026"></div>
       <div class="list-scroll" id="cats-list"></div>
     </div>
 
@@ -514,7 +532,7 @@
         <button class="btn-nav-back" id="back-to-cats"><i class="fas fa-arrow-left"></i> Back</button>
         <span class="nav-title" id="specs-title"></span>
       </div>
-      <div class="search-wrap"><i class="fas fa-magnifying-glass"></i><input type="text" class="search-input" id="search-specs" placeholder="Search specialties\u2026"></div>
+      <div class="search-wrap"><i class="fas fa-magnifying-glass"></i><input type="text" class="search-input" id="search-specs" placeholder="Search everything\u2026"></div>
       <div class="list-scroll" id="specs-list"></div>
     </div>
 
@@ -524,7 +542,7 @@
         <button class="btn-nav-back" id="back-to-specs"><i class="fas fa-arrow-left"></i> Back</button>
         <span class="nav-title" id="notes-title"></span>
       </div>
-      <div class="search-wrap"><i class="fas fa-magnifying-glass"></i><input type="text" class="search-input" id="search-notes" placeholder="Search notes\u2026"></div>
+      <div class="search-wrap"><i class="fas fa-magnifying-glass"></i><input type="text" class="search-input" id="search-notes" placeholder="Search everything\u2026"></div>
       <div class="list-scroll" id="notes-list"></div>
     </div>
 
@@ -2514,11 +2532,11 @@
     });
 
     /* ── Navigation ───────────────────────────────── */
-    $('#back-to-cats').addEventListener('click',()=>{ $('#search-cats').value=''; showView('view-cats'); });
-    $('#back-to-specs').addEventListener('click',()=>{ $('#search-specs').value=''; showView('view-specs'); });
-    $('#back-to-notes').addEventListener('click',()=>{ saveCurrentNote(); S.currentNoteId=null; $('#search-notes').value=''; showView('view-notes'); });
+    $('#back-to-cats').addEventListener('click',()=>{ clearAllSearchInputs(); showView('view-cats'); });
+    $('#back-to-specs').addEventListener('click',()=>{ clearAllSearchInputs(); showView('view-specs'); });
+    $('#back-to-notes').addEventListener('click',()=>{ saveCurrentNote(); S.currentNoteId=null; clearAllSearchInputs(); showView('view-notes'); });
 
-    /* ── Search listeners ─────────────────────────── */
+    /* ── Search listeners (global search from any bar) */
     $('#search-cats').addEventListener('input', renderCats);
     $('#search-specs').addEventListener('input', renderSpecs);
     $('#search-notes').addEventListener('input', renderNotes);
@@ -2543,9 +2561,9 @@
         var v=currentView();
         if(!v) return;
         var vid=v.id;
-        if(vid==='view-editor'){ saveCurrentNote(); S.currentNoteId=null; $('#search-notes').value=''; showView('view-notes'); }
-        else if(vid==='view-notes'){ $('#search-specs').value=''; showView('view-specs'); }
-        else if(vid==='view-specs'){ $('#search-cats').value=''; showView('view-cats'); }
+        if(vid==='view-editor'){ saveCurrentNote(); S.currentNoteId=null; clearAllSearchInputs(); showView('view-notes'); }
+        else if(vid==='view-notes'){ clearAllSearchInputs(); showView('view-specs'); }
+        else if(vid==='view-specs'){ clearAllSearchInputs(); showView('view-cats'); }
       },{passive:true});
     })();
 
@@ -2576,8 +2594,9 @@
     /* ═══ RENDER ══════════════════════════════════════ */
     function renderCats() {
       const el=$('#cats-list'); el.innerHTML='';
-      var q=($('#search-cats').value||'').toLowerCase().trim();
-      var filtered=S.categories.filter(function(cat){ return !q||cat.name.toLowerCase().indexOf(q)>=0; });
+      var q=($('#search-cats').value||'').trim();
+      if (q && renderGlobalSearch(q, el)) return;
+      var filtered=S.categories.filter(function(cat){ return true; });
       if(S.categories.length===0){ el.innerHTML='<div class="empty-list"><div class="ei">📁</div><h3>No categories yet</h3><p>Tap + to create your first category.</p></div>'; return; }
       if(filtered.length===0){ el.innerHTML='<div class="empty-list"><div class="ei">🔍</div><h3>No results</h3><p>No categories match your search.</p></div>'; return; }
       filtered.forEach(cat=>{
@@ -2608,9 +2627,11 @@
       const sub = getSublabel(cat);
       $('#specs-title').textContent=cat.name;
       const specs = S.specialties[S.currentCatId]||[];
-      var q2=($('#search-specs').value||'').toLowerCase().trim();
-      var filteredSpecs=specs.filter(function(sp){ return !q2||sp.name.toLowerCase().indexOf(q2)>=0; });
-      const el=$('#specs-list'); el.innerHTML='';
+      var q2=($('#search-specs').value||'').trim();
+      const el=$('#specs-list');
+      if (q2 && renderGlobalSearch(q2, el)) return;
+      var filteredSpecs=specs.filter(function(sp){ return true; });
+      el.innerHTML='';
       if(specs.length===0){ el.innerHTML='<div class="empty-list"><div class="ei">🔖</div><h3>No '+esc(pluralize(sub,0).toLowerCase())+' yet</h3><p>Tap + to add a '+esc(sub.toLowerCase())+'.</p></div>'; return; }
       if(filteredSpecs.length===0){ el.innerHTML='<div class="empty-list"><div class="ei">🔍</div><h3>No results</h3><p>No '+esc(pluralize(sub,0).toLowerCase())+' match your search.</p></div>'; return; }
       filteredSpecs.forEach(spec=>{
@@ -2642,9 +2663,11 @@
       if(!specObj) return;
       $('#notes-title').textContent=specObj.name;
       const nl=S.notes[S.currentSpecId]||[];
-      var q3=($('#search-notes').value||'').toLowerCase().trim();
-      var filteredNotes=nl.filter(function(n){ return !q3||(n.title||'').toLowerCase().indexOf(q3)>=0; });
-      const el=$('#notes-list'); el.innerHTML='';
+      var q3=($('#search-notes').value||'').trim();
+      const el=$('#notes-list');
+      if (q3 && renderGlobalSearch(q3, el)) return;
+      var filteredNotes=nl.filter(function(n){ return true; });
+      el.innerHTML='';
       if(nl.length===0){ el.innerHTML='<div class="empty-list"><div class="ei">📝</div><h3>No notes yet</h3><p>Tap + to create a note.</p></div>'; return; }
       if(filteredNotes.length===0){ el.innerHTML='<div class="empty-list"><div class="ei">🔍</div><h3>No results</h3><p>No notes match your search.</p></div>'; return; }
       filteredNotes.forEach(note=>{
@@ -2669,6 +2692,129 @@
         card.querySelector('[data-a="del"]').addEventListener('click',()=>deleteNote(note.id,note.title));
         el.appendChild(card);
       });
+    }
+
+    /* ═══ GLOBAL SEARCH ══════════════════════════════ */
+    function highlightMatch(text, query) {
+      if (!query) return esc(text);
+      var safe = esc(text);
+      var qEsc = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return safe.replace(new RegExp('(' + qEsc + ')', 'gi'), '<mark>$1</mark>');
+    }
+
+    function renderGlobalSearch(query, listEl) {
+      listEl.innerHTML = '';
+      var q = query.toLowerCase().trim();
+      if (!q) return false; /* no query — caller should render normal view */
+
+      /* ── Search categories ──────────────────── */
+      var catResults = S.categories.filter(function(cat) {
+        return cat.name.toLowerCase().indexOf(q) >= 0;
+      });
+
+      /* ── Search specialties ─────────────────── */
+      var specResults = [];
+      S.categories.forEach(function(cat) {
+        (S.specialties[cat.id] || []).forEach(function(sp) {
+          if (sp.name.toLowerCase().indexOf(q) >= 0) {
+            specResults.push({ spec: sp, cat: cat });
+          }
+        });
+      });
+
+      /* ── Search notes (title + content) ─────── */
+      var noteResults = [];
+      S.categories.forEach(function(cat) {
+        (S.specialties[cat.id] || []).forEach(function(sp) {
+          (S.notes[sp.id] || []).forEach(function(note) {
+            var titleMatch = (note.title || '').toLowerCase().indexOf(q) >= 0;
+            var contentText = stripHtml(note.content || '').toLowerCase();
+            var contentMatch = contentText.indexOf(q) >= 0;
+            if (titleMatch || contentMatch) {
+              noteResults.push({ note: note, spec: sp, cat: cat, titleMatch: titleMatch });
+            }
+          });
+        });
+      });
+
+      var total = catResults.length + specResults.length + noteResults.length;
+      if (total === 0) {
+        listEl.innerHTML = '<div class="empty-list"><div class="ei">🔍</div><h3>No results</h3><p>Nothing matches &ldquo;' + esc(query) + '&rdquo;</p></div>';
+        return true;
+      }
+
+      /* ── Render category results ────────────── */
+      if (catResults.length > 0) {
+        var sec = document.createElement('div'); sec.className = 'gs-section';
+        sec.innerHTML = '<div class="gs-header"><i class="fas fa-folder"></i> Categories (' + catResults.length + ')</div>';
+        catResults.forEach(function(cat) {
+          var specs = S.specialties[cat.id] || [];
+          var totalNotes = specs.reduce(function(sum, sp) { return (S.notes[sp.id] || []).length + sum; }, 0);
+          var row = document.createElement('div'); row.className = 'gs-item';
+          row.innerHTML =
+            '<div class="gs-icon gs-cat"><i class="fas fa-folder"></i></div>' +
+            '<div class="gs-body"><div class="gs-name">' + highlightMatch(cat.name, q) + '</div>' +
+            '<div class="gs-crumb">' + specs.length + ' ' + esc(pluralize(getSublabel(cat), specs.length).toLowerCase()) + ' &middot; ' + totalNotes + ' notes</div></div>' +
+            '<span class="gs-arrow"><i class="fas fa-chevron-right"></i></span>';
+          row.addEventListener('click', function() {
+            clearAllSearchInputs();
+            S.currentCatId = cat.id; renderSpecs(); showView('view-specs');
+          });
+          sec.appendChild(row);
+        });
+        listEl.appendChild(sec);
+      }
+
+      /* ── Render specialty results ───────────── */
+      if (specResults.length > 0) {
+        var sec2 = document.createElement('div'); sec2.className = 'gs-section';
+        sec2.innerHTML = '<div class="gs-header"><i class="fas fa-bookmark"></i> Specialties (' + specResults.length + ')</div>';
+        specResults.forEach(function(item) {
+          var nl = S.notes[item.spec.id] || [];
+          var row = document.createElement('div'); row.className = 'gs-item';
+          row.innerHTML =
+            '<div class="gs-icon gs-spec"><i class="fas fa-bookmark"></i></div>' +
+            '<div class="gs-body"><div class="gs-name">' + highlightMatch(item.spec.name, q) + '</div>' +
+            '<div class="gs-crumb">' + esc(item.cat.name) + ' &rsaquo; ' + nl.length + ' notes</div></div>' +
+            '<span class="gs-arrow"><i class="fas fa-chevron-right"></i></span>';
+          row.addEventListener('click', function() {
+            clearAllSearchInputs();
+            S.currentCatId = item.cat.id; S.currentSpecId = item.spec.id;
+            renderNotes(); showView('view-notes');
+          });
+          sec2.appendChild(row);
+        });
+        listEl.appendChild(sec2);
+      }
+
+      /* ── Render note results ────────────────── */
+      if (noteResults.length > 0) {
+        var sec3 = document.createElement('div'); sec3.className = 'gs-section';
+        sec3.innerHTML = '<div class="gs-header"><i class="fas fa-file-lines"></i> Notes (' + noteResults.length + ')</div>';
+        noteResults.forEach(function(item) {
+          var row = document.createElement('div'); row.className = 'gs-item';
+          row.innerHTML =
+            '<div class="gs-icon gs-note"><i class="fas fa-file-lines"></i></div>' +
+            '<div class="gs-body"><div class="gs-name">' + (item.titleMatch ? highlightMatch(item.note.title || 'Untitled Note', q) : esc(item.note.title || 'Untitled Note')) + '</div>' +
+            '<div class="gs-crumb">' + esc(item.cat.name) + ' &rsaquo; ' + esc(item.spec.name) + '</div></div>' +
+            '<span class="gs-arrow"><i class="fas fa-chevron-right"></i></span>';
+          row.addEventListener('click', function() {
+            clearAllSearchInputs();
+            S.currentCatId = item.cat.id; S.currentSpecId = item.spec.id;
+            openNote(item.note.id);
+          });
+          sec3.appendChild(row);
+        });
+        listEl.appendChild(sec3);
+      }
+
+      return true;
+    }
+
+    function clearAllSearchInputs() {
+      $('#search-cats').value = '';
+      $('#search-specs').value = '';
+      $('#search-notes').value = '';
     }
 
     /* ═══ CRUD ════════════════════════════════════════ */
