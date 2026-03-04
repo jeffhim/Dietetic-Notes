@@ -119,9 +119,7 @@
     .act-btn.star-btn { color:var(--c-text-muted); }
     .act-btn.star-btn.starred { color:#f59e0b; }
     .act-btn.star-btn.starred:hover { color:#d97706; }
-    .nc-star { position:absolute; top:14px; right:14px; width:28px; height:28px; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:14px; color:var(--c-text-muted); cursor:pointer; transition:all var(--transition); z-index:2; opacity:0.5; }
-    .nc-star:hover { opacity:1; }
-    .nc-star.starred { color:#f59e0b; opacity:1; }
+    /* nc-star removed — star is now in nc-actions bar */
 
     /* ── FAVOURITES VIEW ─────────────────────────── */
     .fav-empty { text-align:center; padding:60px 24px; }
@@ -250,19 +248,20 @@
       overflow:hidden; font-weight:400;
     }
     .note-card .nc-actions {
-      display:flex; gap:2px; position:absolute; top:12px; right:12px;
-      opacity:0; pointer-events:none; transition:opacity var(--transition);
+      display:flex; gap:6px; padding-top:10px; margin-top:8px; border-top:1px solid var(--c-border);
     }
     .note-card { position:relative; }
-    .note-card:hover .nc-actions, .note-card .nc-actions.visible { opacity:1; pointer-events:auto; }
     .nc-actions .act-btn {
-      width:28px; height:28px; border-radius:6px;
-      display:flex; align-items:center; justify-content:center;
+      height:30px; padding:0 10px; border-radius:6px;
+      display:flex; align-items:center; justify-content:center; gap:5px;
       color:var(--c-text-muted); font-size:11px; transition:all var(--transition);
-      background:var(--c-surface);
+      background:var(--c-surface-2); font-weight:600;
     }
-    .nc-actions .act-btn:hover { background:var(--c-surface-2); color:var(--c-text); }
+    .nc-actions .act-btn:hover { background:var(--c-border); color:var(--c-text); }
+    .nc-actions .act-btn.danger { color:var(--c-text-muted); }
     .nc-actions .act-btn.danger:hover { background:rgba(239,68,68,0.1); color:var(--c-danger); }
+    .nc-actions .act-btn.star-active { color:#f59e0b; }
+    .nc-actions .act-btn.star-active:hover { color:#d97706; }
 
     /* ── MOVE DIALOG ──────────────────────────────── */
     .move-overlay { display:none; position:fixed; inset:0; background:var(--c-overlay); z-index:1000; align-items:center; justify-content:center; }
@@ -2916,19 +2915,19 @@
         const card=document.createElement('div'); card.className='note-card has-handle'; card.setAttribute('data-id',note.id);
         card.innerHTML=
           '<span class="drag-handle"><i class="fas fa-grip-vertical"></i></span>'+
-          '<span class="nc-star'+(isFav?' starred':'')+'" data-a="star" title="'+(isFav?'Remove from':'Add to')+' favourites"><i class="fas fa-star"></i></span>'+
-          '<div class="nc-title" style="padding-right:36px">'+esc(note.title||'Untitled Note')+'</div>'+
+          '<div class="nc-title">'+esc(note.title||'Untitled Note')+'</div>'+
           '<div class="nc-row">'+
             (tagName ? '<span class="nc-tag">'+esc(tagName)+'</span>' : '')+
             '<span class="nc-date">'+fmtDate(note.updatedAt||note.createdAt)+'</span>'+
           '</div>'+
           (preview ? '<div class="nc-preview">'+esc(preview)+'</div>' : '')+
-          '<span class="nc-actions">'+
-            '<button class="act-btn" data-a="move" title="Move"><i class="fas fa-arrow-right-arrow-left"></i></button>'+
-            '<button class="act-btn danger" data-a="del" title="Delete"><i class="fas fa-trash"></i></button>'+
-          '</span>';
+          '<div class="nc-actions">'+
+            '<button class="act-btn'+(isFav?' star-active':'')+'" data-a="star" title="'+(isFav?'Remove from':'Add to')+' Favourites"><i class="fas fa-star"></i> '+(isFav?'Starred':'Star')+'</button>'+
+            '<button class="act-btn" data-a="move" title="Move"><i class="fas fa-arrow-right-arrow-left"></i> Move</button>'+
+            '<button class="act-btn danger" data-a="del" title="Delete"><i class="fas fa-trash"></i> Delete</button>'+
+          '</div>';
         card.addEventListener('click',e=>{ if(e.target.closest('[data-a]')||e.target.closest('.drag-handle')) return; openNote(note.id); });
-        card.querySelector('[data-a="star"]').addEventListener('click',function(e){ e.stopPropagation(); toggleFavourite(note.id, this); });
+        card.querySelector('[data-a="star"]').addEventListener('click',function(e){ e.stopPropagation(); var btn=this; var nowFav=!note.favourite; toggleFavourite(note.id, null); if(nowFav){btn.classList.add('star-active');btn.innerHTML='<i class="fas fa-star"></i> Starred';}else{btn.classList.remove('star-active');btn.innerHTML='<i class="fas fa-star"></i> Star';} });
         card.querySelector('[data-a="move"]').addEventListener('click',()=>openMoveDialog(note.id,note.title));
         card.querySelector('[data-a="del"]').addEventListener('click',()=>deleteNote(note.id,note.title));
         el.appendChild(card);
@@ -2979,13 +2978,15 @@
         var preview = stripHtml(note.content);
         var card = document.createElement('div'); card.className = 'note-card';
         card.innerHTML =
-          '<span class="nc-star starred" data-a="star" title="Remove from favourites"><i class="fas fa-star"></i></span>' +
-          '<div class="nc-title" style="padding-right:36px">' + esc(note.title || 'Untitled Note') + '</div>' +
+          '<div class="nc-title">' + esc(note.title || 'Untitled Note') + '</div>' +
           '<div class="nc-row">' +
             '<span class="nc-tag">' + esc(item.cat.name) + ' \u203A ' + esc(item.spec.name) + '</span>' +
             '<span class="nc-date">' + fmtDate(note.updatedAt || note.createdAt) + '</span>' +
           '</div>' +
-          (preview ? '<div class="nc-preview">' + esc(preview) + '</div>' : '');
+          (preview ? '<div class="nc-preview">' + esc(preview) + '</div>' : '') +
+          '<div class="nc-actions">' +
+            '<button class="act-btn star-active" data-a="star" title="Remove from Favourites"><i class="fas fa-star"></i> Unstar</button>' +
+          '</div>';
         card.addEventListener('click', function(e) {
           if (e.target.closest('[data-a]')) return;
           S.currentCatId = item.cat.id;
@@ -2996,7 +2997,6 @@
           e.stopPropagation();
           toggleFavourite(note.id, null);
           card.remove();
-          /* If no favourites left, show empty state */
           if ($('#favs-list').children.length === 0) {
             $('#favs-list').innerHTML = '<div class="fav-empty"><div class="fav-icon"><i class="far fa-star"></i></div><h3>No favourites yet</h3><p>Tap the star icon on any note to add it here.</p></div>';
           }
