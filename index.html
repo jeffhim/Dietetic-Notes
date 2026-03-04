@@ -185,8 +185,7 @@
     .list-item.drag-over-above, .note-card.drag-over-above { box-shadow:0 -3px 0 0 var(--c-primary) inset; }
     .list-item.drag-over-below, .note-card.drag-over-below { box-shadow:0 3px 0 0 var(--c-primary) inset; }
     .drag-placeholder { border:2px dashed var(--c-primary); border-radius:var(--radius-md); background:rgba(45,212,191,0.06); min-height:52px; margin-bottom:8px; transition:all 0.15s; }
-    .note-card .drag-handle { position:absolute; left:2px; top:50%; transform:translateY(-50%); width:20px; height:28px; }
-    .note-card.has-handle { padding-left:28px; }
+    /* note-card drag handle is now inline via flex row */
 
     /* ── LIST VIEW (shared by categories / specs) ─── */
     .list-scroll { flex:1; overflow-y:auto; padding:12px; }
@@ -210,8 +209,7 @@
     .list-item .li-name { font-weight:700; font-size:15px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
     .list-item .li-meta { font-size:12px; color:var(--c-text-muted); margin-top:1px; font-weight:500; }
     .list-item .li-arrow { color:var(--c-text-muted); font-size:13px; flex-shrink:0; margin-left:4px; }
-    .list-item .li-actions { display:none; gap:2px; flex-shrink:0; }
-    .list-item:hover .li-actions, .list-item .li-actions.visible { display:flex; }
+    .list-item .li-actions { display:flex; gap:2px; flex-shrink:0; }
     .li-actions .act-btn {
       width:32px; height:32px; border-radius:var(--radius-sm);
       display:flex; align-items:center; justify-content:center;
@@ -220,48 +218,31 @@
     .li-actions .act-btn:hover { background:var(--c-surface-2); color:var(--c-text); }
     .li-actions .act-btn.danger:hover { background:rgba(192,57,43,0.1); color:var(--c-danger); }
 
-    /* ── NOTE CARD (flat, no icon, with tag bubble + preview) ── */
+    /* ── NOTE CARD (inline flex row, same style as list-item) ── */
     .note-card {
-      padding:18px 20px; margin-bottom:4px; cursor:pointer;
-      border-bottom:1px solid var(--c-border);
-      transition:background var(--transition);
+      display:flex; align-items:center; gap:12px;
+      padding:14px 16px; margin-bottom:8px;
+      border-radius:var(--radius-md); background:var(--c-surface);
+      border:1px solid var(--c-border); cursor:pointer;
+      transition:all var(--transition); box-shadow:var(--shadow-sm);
     }
-    .note-card:last-child { border-bottom:none; }
-    .note-card:hover { background:var(--c-surface-2); }
-    .note-card:active { opacity:0.85; }
-    .note-card .nc-title {
-      font-weight:700; font-size:16px; margin-bottom:5px;
-      color:var(--c-text); line-height:1.35;
-    }
-    .note-card .nc-row {
-      display:flex; align-items:center; gap:8px; margin-bottom:6px; flex-wrap:wrap;
-    }
-    .nc-tag {
-      display:inline-block; padding:2px 10px; border-radius:6px;
-      font-size:12px; font-weight:700; line-height:1.6;
-      background:rgba(45,212,191,0.15); color:var(--c-primary);
-    }
-    .nc-date { font-size:13px; color:var(--c-text-muted); font-weight:500; }
-    .note-card .nc-preview {
-      font-size:14px; color:var(--c-text-secondary); line-height:1.55;
-      display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;
-      overflow:hidden; font-weight:400;
-    }
-    .note-card .nc-actions {
-      display:flex; gap:6px; padding-top:10px; margin-top:8px; border-top:1px solid var(--c-border);
-    }
-    .note-card { position:relative; }
+    .note-card:hover { box-shadow:var(--shadow-md); border-color:var(--c-primary); }
+    .note-card:active { transform:scale(0.99); }
+    .note-card .nc-icon { width:40px; height:40px; border-radius:10px; display:flex; align-items:center; justify-content:center; font-size:16px; flex-shrink:0; background:rgba(243,156,18,0.08); color:#f39c12; }
+    .note-card .nc-body { flex:1; min-width:0; }
+    .note-card .nc-title { font-weight:700; font-size:15px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--c-text); }
+    .note-card .nc-meta { font-size:12px; color:var(--c-text-muted); margin-top:1px; font-weight:500; }
+    .note-card .nc-actions { display:flex; gap:2px; flex-shrink:0; }
     .nc-actions .act-btn {
-      height:30px; padding:0 10px; border-radius:6px;
-      display:flex; align-items:center; justify-content:center; gap:5px;
-      color:var(--c-text-muted); font-size:11px; transition:all var(--transition);
-      background:var(--c-surface-2); font-weight:600;
+      width:32px; height:32px; border-radius:var(--radius-sm);
+      display:flex; align-items:center; justify-content:center;
+      color:var(--c-text-muted); font-size:12px; transition:all var(--transition);
     }
-    .nc-actions .act-btn:hover { background:var(--c-border); color:var(--c-text); }
-    .nc-actions .act-btn.danger { color:var(--c-text-muted); }
+    .nc-actions .act-btn:hover { background:var(--c-surface-2); color:var(--c-text); }
     .nc-actions .act-btn.danger:hover { background:rgba(239,68,68,0.1); color:var(--c-danger); }
     .nc-actions .act-btn.star-active { color:#f59e0b; }
     .nc-actions .act-btn.star-active:hover { color:#d97706; }
+    .note-card .nc-arrow { color:var(--c-text-muted); font-size:13px; flex-shrink:0; margin-left:4px; }
 
     /* ── MOVE DIALOG ──────────────────────────────── */
     .move-overlay { display:none; position:fixed; inset:0; background:var(--c-overlay); z-index:1000; align-items:center; justify-content:center; }
@@ -583,7 +564,7 @@
           <button class="btn-topbar" id="btn-signout" title="Sign out"><i class="fas fa-right-from-bracket"></i></button>
         </div>
       </div>
-      <div class="search-wrap"><i class="fas fa-magnifying-glass"></i><input type="text" class="search-input" id="search-cats" placeholder="Search everything\u2026"></div>
+      <div class="search-wrap"><i class="fas fa-magnifying-glass"></i><input type="text" class="search-input" id="search-cats" placeholder="Search everything…"></div>
       <div class="list-scroll" id="cats-list"></div>
     </div>
 
@@ -597,7 +578,7 @@
           <button class="btn-topbar" id="btn-favs-specs" title="My Favourites"><i class="fas fa-star"></i></button>
         </div>
       </div>
-      <div class="search-wrap"><i class="fas fa-magnifying-glass"></i><input type="text" class="search-input" id="search-specs" placeholder="Search everything\u2026"></div>
+      <div class="search-wrap"><i class="fas fa-magnifying-glass"></i><input type="text" class="search-input" id="search-specs" placeholder="Search everything…"></div>
       <div class="list-scroll" id="specs-list"></div>
     </div>
 
@@ -611,7 +592,7 @@
           <button class="btn-topbar" id="btn-favs-notes" title="My Favourites"><i class="fas fa-star"></i></button>
         </div>
       </div>
-      <div class="search-wrap"><i class="fas fa-magnifying-glass"></i><input type="text" class="search-input" id="search-notes" placeholder="Search everything\u2026"></div>
+      <div class="search-wrap"><i class="fas fa-magnifying-glass"></i><input type="text" class="search-input" id="search-notes" placeholder="Search everything…"></div>
       <div class="list-scroll" id="notes-list"></div>
     </div>
 
@@ -2909,27 +2890,22 @@
       if(nl.length===0){ el.innerHTML='<div class="empty-list"><div class="ei">📝</div><h3>No notes yet</h3><p>Tap + to create a note.</p></div>'; return; }
       if(filteredNotes.length===0){ el.innerHTML='<div class="empty-list"><div class="ei">🔍</div><h3>No results</h3><p>No notes match your search.</p></div>'; return; }
       filteredNotes.forEach(note=>{
-        const preview = stripHtml(note.content);
-        const tagName = specObj ? specObj.name : '';
         const isFav = note.favourite === true;
-        const card=document.createElement('div'); card.className='note-card has-handle'; card.setAttribute('data-id',note.id);
+        const card=document.createElement('div'); card.className='note-card'; card.setAttribute('data-id',note.id);
         card.innerHTML=
           '<span class="drag-handle"><i class="fas fa-grip-vertical"></i></span>'+
-          '<div class="nc-title">'+esc(note.title||'Untitled Note')+'</div>'+
-          '<div class="nc-row">'+
-            (tagName ? '<span class="nc-tag">'+esc(tagName)+'</span>' : '')+
-            '<span class="nc-date">'+fmtDate(note.updatedAt||note.createdAt)+'</span>'+
-          '</div>'+
-          (preview ? '<div class="nc-preview">'+esc(preview)+'</div>' : '')+
-          '<div class="nc-actions">'+
-            '<button class="act-btn'+(isFav?' star-active':'')+'" data-a="star" title="'+(isFav?'Remove from':'Add to')+' Favourites"><i class="fas fa-star"></i> '+(isFav?'Starred':'Star')+'</button>'+
-            '<button class="act-btn" data-a="move" title="Move"><i class="fas fa-arrow-right-arrow-left"></i> Move</button>'+
-            '<button class="act-btn danger" data-a="del" title="Delete"><i class="fas fa-trash"></i> Delete</button>'+
-          '</div>';
+          '<div class="nc-icon"><i class="fas fa-file-lines"></i></div>'+
+          '<div class="nc-body"><div class="nc-title">'+esc(note.title||'Untitled Note')+'</div><div class="nc-meta">'+fmtDate(note.updatedAt||note.createdAt)+'</div></div>'+
+          '<span class="nc-actions">'+
+            '<button class="act-btn'+(isFav?' star-active':'')+'" data-a="star" title="'+(isFav?'Remove from':'Add to')+' Favourites"><i class="fas fa-star"></i></button>'+
+            '<button class="act-btn" data-a="move" title="Move"><i class="fas fa-arrow-right-arrow-left"></i></button>'+
+            '<button class="act-btn danger" data-a="del" title="Delete"><i class="fas fa-trash"></i></button>'+
+          '</span>'+
+          '<span class="nc-arrow"><i class="fas fa-chevron-right"></i></span>';
         card.addEventListener('click',e=>{ if(e.target.closest('[data-a]')||e.target.closest('.drag-handle')) return; openNote(note.id); });
-        card.querySelector('[data-a="star"]').addEventListener('click',function(e){ e.stopPropagation(); var btn=this; var nowFav=!note.favourite; toggleFavourite(note.id, null); if(nowFav){btn.classList.add('star-active');btn.innerHTML='<i class="fas fa-star"></i> Starred';}else{btn.classList.remove('star-active');btn.innerHTML='<i class="fas fa-star"></i> Star';} });
-        card.querySelector('[data-a="move"]').addEventListener('click',()=>openMoveDialog(note.id,note.title));
-        card.querySelector('[data-a="del"]').addEventListener('click',()=>deleteNote(note.id,note.title));
+        card.querySelector('[data-a="star"]').addEventListener('click',function(e){ e.stopPropagation(); var btn=this; var nowFav=!note.favourite; toggleFavourite(note.id, null); if(nowFav){btn.classList.add('star-active');}else{btn.classList.remove('star-active');} });
+        card.querySelector('[data-a="move"]').addEventListener('click',function(e){e.stopPropagation();openMoveDialog(note.id,note.title);});
+        card.querySelector('[data-a="del"]').addEventListener('click',function(e){e.stopPropagation();deleteNote(note.id,note.title);});
         el.appendChild(card);
       });
       initDragReorder(el, 'notes');
@@ -2975,18 +2951,14 @@
 
       favNotes.forEach(function(item) {
         var note = item.note;
-        var preview = stripHtml(note.content);
         var card = document.createElement('div'); card.className = 'note-card';
         card.innerHTML =
-          '<div class="nc-title">' + esc(note.title || 'Untitled Note') + '</div>' +
-          '<div class="nc-row">' +
-            '<span class="nc-tag">' + esc(item.cat.name) + ' \u203A ' + esc(item.spec.name) + '</span>' +
-            '<span class="nc-date">' + fmtDate(note.updatedAt || note.createdAt) + '</span>' +
-          '</div>' +
-          (preview ? '<div class="nc-preview">' + esc(preview) + '</div>' : '') +
-          '<div class="nc-actions">' +
-            '<button class="act-btn star-active" data-a="star" title="Remove from Favourites"><i class="fas fa-star"></i> Unstar</button>' +
-          '</div>';
+          '<div class="nc-icon"><i class="fas fa-file-lines"></i></div>' +
+          '<div class="nc-body"><div class="nc-title">' + esc(note.title || 'Untitled Note') + '</div><div class="nc-meta">' + esc(item.cat.name) + ' \u203A ' + esc(item.spec.name) + '</div></div>' +
+          '<span class="nc-actions">' +
+            '<button class="act-btn star-active" data-a="star" title="Remove from Favourites"><i class="fas fa-star"></i></button>' +
+          '</span>' +
+          '<span class="nc-arrow"><i class="fas fa-chevron-right"></i></span>';
         card.addEventListener('click', function(e) {
           if (e.target.closest('[data-a]')) return;
           S.currentCatId = item.cat.id;
