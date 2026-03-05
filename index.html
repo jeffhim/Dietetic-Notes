@@ -1956,7 +1956,9 @@
     const quill = new Quill('#quill-editor',{
       theme:'snow', placeholder:'Start writing your notes\u2026',
       scrollingContainer:'.editor-body',
-      modules:{ toolbar:{
+      modules:{
+        history:{ delay:1000, maxStack:500, userOnly:true },
+        toolbar:{
         container:[
           [{header:[1,2,3,false]}],['bold','italic','underline','strike'],
           [{color:[]},{background:[]}],[{list:'ordered'},{list:'bullet'}],
@@ -2002,8 +2004,8 @@
       toolbar.addHandler('table-insert', function() { /* handled by click below */ });
 
       /* ── Undo / Redo ── */
-      toolbar.addHandler('undo', function() { quill.history.undo(); });
-      toolbar.addHandler('redo', function() { quill.history.redo(); });
+      toolbar.addHandler('undo', function() { var h = quill.getModule('history'); if(h) h.undo(); });
+      toolbar.addHandler('redo', function() { var h = quill.getModule('history'); if(h) h.redo(); });
 
       /* Replace undo/redo button content with icons */
       var undoBtn = document.querySelector('.ql-undo');
