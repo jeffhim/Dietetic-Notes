@@ -3491,7 +3491,9 @@
       $('#editor-crumb').innerHTML = (cat?esc(cat.name):'') + ' <span style="color:var(--c-text-muted);font-size:12px;font-family:var(--font-main)"> &rsaquo; ' + (specObj?esc(specObj.name):'') + '</span>';
       $('#note-title').value=noteData.title||'';
       $('#note-meta').textContent=noteData.updatedAt ? 'Last updated: '+fmtDateLong(noteData.updatedAt) : '';
-      quill.root.innerHTML=noteData.content||'';
+      var delta = quill.clipboard.convert({html: noteData.content||''});
+      quill.setContents(delta, 'silent');
+      quill.history.clear();
       /* Record to search history */
       var crumbParts = [];
       if (cat) crumbParts.push(cat.name);
