@@ -359,10 +359,6 @@
     .fab:hover { background:var(--c-primary-hover); transform:scale(1.08); }
 
     /* ── EDITOR VIEW ───────────────────────────────── */
-    .zoom-controls { display:flex; align-items:center; gap:2px; flex-shrink:0; }
-    .zoom-btn { width:28px; height:28px; border-radius:6px; display:flex; align-items:center; justify-content:center; color:var(--c-text-secondary); font-size:13px; font-weight:800; transition:all var(--transition); background:var(--c-surface-2); }
-    .zoom-btn:hover { background:var(--c-border); color:var(--c-text); }
-    .zoom-label { font-size:11px; color:var(--c-text-muted); font-weight:700; min-width:32px; text-align:center; }
     .save-status { font-size:12px; display:flex; align-items:center; gap:4px; color:var(--c-text-muted); flex-shrink:0; font-weight:600; }
     .save-status.saving { color:var(--c-accent); }
     .save-status.saved { color:var(--c-primary); }
@@ -602,11 +598,6 @@
         <button class="btn-nav-back" id="back-to-notes"><i class="fas fa-arrow-left"></i> Back</button>
         <span class="nav-title" id="editor-crumb"></span>
         <button class="btn-topbar" id="btn-editor-move" title="Move note"><i class="fas fa-arrow-right-arrow-left"></i></button>
-        <div class="zoom-controls">
-          <button class="zoom-btn" id="zoom-out" title="Zoom out">A-</button>
-          <span class="zoom-label" id="zoom-label">100%</span>
-          <button class="zoom-btn" id="zoom-in" title="Zoom in">A+</button>
-        </div>
         <div class="save-status" id="save-status"></div>
       </div>
       <div class="editor-body">
@@ -1966,7 +1957,10 @@
           ['blockquote','code-block'],['link','image'],['table-insert'],['clean'],
           ['undo','redo']
         ],
-        handlers:{}
+        handlers:{
+          'undo': function() {},
+          'redo': function() {}
+        }
       }}
     });
 
@@ -2003,15 +1997,25 @@
       /* ── Table insert button: replace Quill default with SVG icon ── */
       toolbar.addHandler('table-insert', function() { /* handled by click below */ });
 
-      /* ── Undo / Redo ── */
-      toolbar.addHandler('undo', function() { var h = quill.getModule('history'); if(h) h.undo(); });
-      toolbar.addHandler('redo', function() { var h = quill.getModule('history'); if(h) h.redo(); });
-
-      /* Replace undo/redo button content with icons */
-      var undoBtn = document.querySelector('.ql-undo');
-      if (undoBtn) { undoBtn.innerHTML = '<svg viewBox="0 0 18 18"><polyline points="6 8 2 4 6 0" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M2 4h9a5 5 0 0 1 0 10H8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>'; undoBtn.title = 'Undo'; }
-      var redoBtn = document.querySelector('.ql-redo');
-      if (redoBtn) { redoBtn.innerHTML = '<svg viewBox="0 0 18 18"><polyline points="12 8 16 4 12 0" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M16 4H7a5 5 0 0 0 0 10h3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>'; redoBtn.title = 'Redo'; }
+      /* ── Undo / Redo (bypass Quill toolbar handler — clone buttons for direct listeners) ── */
+      var origUndo = document.querySelector('.ql-undo');
+      if (origUndo) {
+        var newUndo = origUndo.cloneNode(false);
+        newUndo.innerHTML = '<svg viewBox="0 0 18 18"><polyline points="6 8 2 4 6 0" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M2 4h9a5 5 0 0 1 0 10H8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
+        newUndo.title = 'Undo';
+        newUndo.setAttribute('type', 'button');
+        origUndo.parentNode.replaceChild(newUndo, origUndo);
+        newUndo.addEventListener('click', function(e) { e.preventDefault(); quill.history.undo(); });
+      }
+      var origRedo = document.querySelector('.ql-redo');
+      if (origRedo) {
+        var newRedo = origRedo.cloneNode(false);
+        newRedo.innerHTML = '<svg viewBox="0 0 18 18"><polyline points="12 8 16 4 12 0" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M16 4H7a5 5 0 0 0 0 10h3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
+        newRedo.title = 'Redo';
+        newRedo.setAttribute('type', 'button');
+        origRedo.parentNode.replaceChild(newRedo, origRedo);
+        newRedo.addEventListener('click', function(e) { e.preventDefault(); quill.history.redo(); });
+      }
     })();
 
     /* ═══ COLOR PICKER FIX (position:fixed) ═════════════ */
@@ -3541,48 +3545,50 @@
       });
     });
 
-    /* ── Editor zoom (font-size based) ── */
+    /* ── Pinch-to-zoom on editor content only (CSS zoom) ── */
     (function() {
-      var ZOOM_STEPS = [75, 80, 90, 100, 110, 125, 150, 175, 200];
-      var zoomIdx = 3; /* default 100% */
-      var editor = document.querySelector('.ql-editor');
-      var container = document.querySelector('.ql-container.ql-snow');
-      var label = $('#zoom-label');
-      var baseFontSize = 15; /* matches .ql-container font-size */
+      var editorEl = document.querySelector('.ql-editor');
+      var editorBody = document.querySelector('.editor-body');
+      if (!editorEl || !editorBody) return;
 
-      function applyZoom() {
-        var pct = ZOOM_STEPS[zoomIdx];
-        var fs = Math.round(baseFontSize * pct / 100);
-        container.style.fontSize = fs + 'px';
-        label.textContent = pct + '%';
-      }
-
-      $('#zoom-in').addEventListener('click', function() {
-        if (zoomIdx < ZOOM_STEPS.length - 1) { zoomIdx++; applyZoom(); }
-      });
-      $('#zoom-out').addEventListener('click', function() {
-        if (zoomIdx > 0) { zoomIdx--; applyZoom(); }
-      });
-
-      /* Pinch-to-zoom on editor only */
+      var currentZoom = 1;
+      var MIN_ZOOM = 0.5;
+      var MAX_ZOOM = 3;
       var lastDist = 0;
-      container.addEventListener('touchstart', function(e) {
+      var isPinching = false;
+
+      editorBody.addEventListener('touchstart', function(e) {
         if (e.touches.length === 2) {
-          lastDist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+          isPinching = true;
+          lastDist = Math.hypot(
+            e.touches[0].clientX - e.touches[1].clientX,
+            e.touches[0].clientY - e.touches[1].clientY
+          );
         }
       }, {passive: true});
-      container.addEventListener('touchmove', function(e) {
-        if (e.touches.length === 2) {
-          var dist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+
+      editorBody.addEventListener('touchmove', function(e) {
+        if (e.touches.length === 2 && isPinching) {
+          e.preventDefault();
+          var dist = Math.hypot(
+            e.touches[0].clientX - e.touches[1].clientX,
+            e.touches[0].clientY - e.touches[1].clientY
+          );
           if (lastDist > 0) {
             var ratio = dist / lastDist;
-            if (ratio > 1.15 && zoomIdx < ZOOM_STEPS.length - 1) { zoomIdx++; applyZoom(); lastDist = dist; }
-            else if (ratio < 0.85 && zoomIdx > 0) { zoomIdx--; applyZoom(); lastDist = dist; }
+            currentZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, currentZoom * ratio));
+            editorEl.style.zoom = currentZoom;
           }
           lastDist = dist;
         }
+      }, {passive: false});
+
+      editorBody.addEventListener('touchend', function(e) {
+        if (e.touches.length < 2) {
+          isPinching = false;
+          lastDist = 0;
+        }
       }, {passive: true});
-      container.addEventListener('touchend', function() { lastDist = 0; }, {passive: true});
     })();
 
     /* ── Intercept pasted/dropped images → compress before insert ── */
