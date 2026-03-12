@@ -2360,9 +2360,9 @@
     imgFileInput.style.display = 'none';
     document.body.appendChild(imgFileInput);
 
-    /* ── Compress image file → base64 data URL (max 800px, JPEG q0.6) ── */
+    /* ── Compress image file → base64 data URL ── */
     function compressImage(file, maxW, quality) {
-      maxW = maxW || 800; quality = quality || 0.6;
+      maxW = maxW || 800; quality = quality || 0.55;
       return new Promise(function(resolve, reject) {
         var reader = new FileReader();
         reader.onerror = function() { reject(new Error('Failed to read image')); };
@@ -2375,7 +2375,12 @@
             var cvs = document.createElement('canvas');
             cvs.width = w; cvs.height = h;
             cvs.getContext('2d').drawImage(img, 0, 0, w, h);
-            resolve(cvs.toDataURL('image/jpeg', quality));
+            /* Try JPEG first; if too large re-compress at lower quality */
+            var dataUrl = cvs.toDataURL('image/jpeg', quality);
+            if (dataUrl.length > 300000 && quality > 0.3) {
+              dataUrl = cvs.toDataURL('image/jpeg', 0.3);
+            }
+            resolve(dataUrl);
           };
           img.src = e.target.result;
         };
@@ -2419,6 +2424,9 @@
             quill.insertEmbed(range.index, 'image', dataUrl, 'user');
             quill.setSelection(range.index + 1, 0, 'silent');
             quill.focus();
+            /* Force immediate save */
+            if(saveTimer) clearTimeout(saveTimer);
+            saveCurrentNote();
           } catch(err) {
             statusEl.textContent = 'Failed: ' + err.message;
             statusEl.style.color = 'var(--c-danger)';
@@ -3484,6 +3492,52 @@
     }
 
     /* ═══ EDITOR ══════════════════════════════════════ */
+
+    /* ── Load HTML into Quill safely (protects long data-URLs from being mangled) ── */
+    function loadNoteHTML(html) {
+      if (!html) { quill.setContents([{insert:'\n'}], 'silent'); quill.history.clear(); return; }
+
+      /* Count expected images so we can verify later */
+      var expectedImgs = (html.match(/<img\s/gi) || []).length;
+
+      /* 1. Parse HTML and swap long image srcs with short data:-protocol placeholders
+            (must be data: protocol so Quill's Image.sanitize() doesn't strip them) */
+      var tmp = document.createElement('div');
+      tmp.innerHTML = html;
+      var imgEls = tmp.querySelectorAll('img[src]');
+      var srcMap = {};
+      imgEls.forEach(function(img, i) {
+        var src = img.getAttribute('src');
+        if (src && src.length > 200) {
+          var key = 'data:,IMG' + i;
+          srcMap[key] = src;
+          img.setAttribute('src', key);
+        }
+      });
+
+      /* 2. Let Quill convert the lightweight HTML → Delta */
+      var delta = quill.clipboard.convert({html: tmp.innerHTML});
+
+      /* 3. Restore real image sources in the delta ops */
+      delta.ops.forEach(function(op) {
+        if (op.insert && op.insert.image && srcMap[op.insert.image]) {
+          op.insert.image = srcMap[op.insert.image];
+        }
+      });
+
+      /* 4. Apply to editor */
+      quill.setContents(delta, 'silent');
+
+      /* 5. Verify images survived conversion — fallback to innerHTML if any were lost */
+      var actualImgs = quill.root.querySelectorAll('img').length;
+      if (actualImgs < expectedImgs) {
+        quill.root.innerHTML = html;
+        try { quill.update('silent'); } catch(e) { /* images display even if Quill state sync fails */ }
+      }
+
+      quill.history.clear();
+    }
+
     function openNote(noteId) {
       saveCurrentNote();
       S.currentNoteId=noteId;
@@ -3495,11 +3549,8 @@
       $('#editor-crumb').innerHTML = (cat?esc(cat.name):'') + ' <span style="color:var(--c-text-muted);font-size:12px;font-family:var(--font-main)"> &rsaquo; ' + (specObj?esc(specObj.name):'') + '</span>';
       $('#note-title').value=noteData.title||'';
       $('#note-meta').textContent=noteData.updatedAt ? 'Last updated: '+fmtDateLong(noteData.updatedAt) : '';
-      /* Set HTML directly for reliable rendering of base64 & URL images */
-      quill.setText('\n', 'silent');
-      quill.root.innerHTML = noteData.content || '';
-      quill.update('silent');
-      quill.history.clear();
+      /* Load note content — protect base64 images from Quill's HTML conversion */
+      loadNoteHTML(noteData.content || '');
       /* Record to search history */
       var crumbParts = [];
       if (cat) crumbParts.push(cat.name);
@@ -3611,6 +3662,9 @@
               var dataUrl = await compressImage(file);
               quill.insertEmbed(range.index, 'image', dataUrl, 'user');
               quill.setSelection(range.index + 1, 0, 'silent');
+              /* Force immediate save — don't rely on text-change event */
+              if(saveTimer) clearTimeout(saveTimer);
+              saveCurrentNote();
             } catch(err) {
               quill.insertText(range.index, '[Image failed: '+err.message+']', {color:'#DC2626'}, 'user');
             }
@@ -3631,6 +3685,9 @@
           var dataUrl = await compressImage(file);
           quill.insertEmbed(range.index, 'image', dataUrl, 'user');
           quill.setSelection(range.index + 1, 0, 'silent');
+          /* Force immediate save */
+          if(saveTimer) clearTimeout(saveTimer);
+          saveCurrentNote();
         } catch(err) {
           quill.insertText(range.index, '[Image failed: '+err.message+']', {color:'#DC2626'}, 'user');
         }
