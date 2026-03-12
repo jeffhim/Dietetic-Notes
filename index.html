@@ -3495,8 +3495,10 @@
       $('#editor-crumb').innerHTML = (cat?esc(cat.name):'') + ' <span style="color:var(--c-text-muted);font-size:12px;font-family:var(--font-main)"> &rsaquo; ' + (specObj?esc(specObj.name):'') + '</span>';
       $('#note-title').value=noteData.title||'';
       $('#note-meta').textContent=noteData.updatedAt ? 'Last updated: '+fmtDateLong(noteData.updatedAt) : '';
-      var delta = quill.clipboard.convert({html: noteData.content||''});
-      quill.setContents(delta, 'silent');
+      /* Set HTML directly for reliable rendering of base64 & URL images */
+      quill.setText('\n', 'silent');
+      quill.root.innerHTML = noteData.content || '';
+      quill.update('silent');
       quill.history.clear();
       /* Record to search history */
       var crumbParts = [];
@@ -3509,7 +3511,7 @@
 
     /* ── Auto-save ────────────────────────────────── */
     let saveTimer=null;
-    function scheduleSave() { if(saveTimer) clearTimeout(saveTimer); saveTimer=setTimeout(saveCurrentNote,1000); }
+    function scheduleSave(delta, oldDelta, source) { if(source && source !== 'user') return; if(saveTimer) clearTimeout(saveTimer); saveTimer=setTimeout(saveCurrentNote,1000); }
     async function saveCurrentNote() {
       if(!S.currentNoteId||!store) return;
       const title=$('#note-title').value.trim()||'Untitled Note';
@@ -3518,7 +3520,10 @@
       ss.innerHTML='<i class="fas fa-circle-notch fa-spin"></i> Saving\u2026'; ss.className='save-status saving';
       try{ await store.update('notes',S.currentNoteId,{title,content});
         ss.innerHTML='<i class="fas fa-check"></i> Saved'; ss.className='save-status saved';
-      }catch(e){ ss.innerHTML='<i class="fas fa-exclamation-circle"></i> Error'; ss.className='save-status error'; }
+      }catch(e){
+        var msg = (e.message && e.message.indexOf('exceeds the maximum') !== -1) ? 'Note too large — try removing some images' : 'Save error';
+        ss.innerHTML='<i class="fas fa-exclamation-circle"></i> ' + msg; ss.className='save-status error';
+      }
     }
     quill.on('text-change',scheduleSave);
     $('#note-title').addEventListener('input',scheduleSave);
