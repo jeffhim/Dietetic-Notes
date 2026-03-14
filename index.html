@@ -363,7 +363,8 @@
     .save-status.saving { color:var(--c-accent); }
     .save-status.saved { color:var(--c-primary); }
     .save-status.error { color:var(--c-danger); }
-    .editor-body { flex:1; display:flex; flex-direction:column; overflow-y:auto; -webkit-overflow-scrolling:touch; background:var(--c-surface); }
+    .editor-body { flex:1; display:flex; flex-direction:column; overflow:hidden; background:var(--c-surface); min-height:0; }
+    .editor-scroll { flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch; min-height:0; }
     .note-title-wrap { padding:20px 20px 0; flex-shrink:0; }
     #note-title { width:100%; border:none; outline:none; font-family:var(--font-main); font-size:24px; font-weight:800; color:var(--c-text); background:transparent; padding:0; }
     #note-title::placeholder { color:var(--c-text-muted); }
@@ -372,7 +373,7 @@
     .btn-add-section:hover { background:rgba(45,212,191,0.16); }
     .btn-add-section i { font-size:11px; }
     .editor-quill { flex:1; display:flex; flex-direction:column; overflow:visible; position:relative; min-height:0; }
-    .ql-toolbar.ql-snow { border:none !important; border-top:1px solid var(--c-border) !important; border-bottom:1px solid var(--c-border) !important; background:var(--c-surface-2); padding:5px 16px !important; flex-shrink:0; position:sticky; top:0; z-index:10; }
+    .ql-toolbar.ql-snow { border:none !important; border-top:1px solid var(--c-border) !important; border-bottom:1px solid var(--c-border) !important; background:var(--c-surface-2); padding:5px 16px !important; flex-shrink:0; z-index:10; }
     .ql-container.ql-snow { border:none !important; flex:1; overflow-y:visible; font-family:var(--font-main); font-size:15px; position:relative; }
     .ql-editor { padding:16px 20px 60px !important; color:var(--c-text); line-height:1.75; min-height:300px; }
     .ql-editor.ql-blank::before { color:var(--c-text-muted) !important; font-style:normal !important; }
@@ -614,10 +615,13 @@
         <div class="save-status" id="save-status"></div>
       </div>
       <div class="editor-body">
-        <div class="note-title-wrap"><input type="text" id="note-title" placeholder="Untitled Note"></div>
-        <div class="note-meta" id="note-meta"></div>
-        <button class="btn-add-section" id="btn-add-section"><i class="fas fa-plus"></i> Add Section</button>
-        <div class="editor-quill"><div id="quill-editor"></div></div>
+        <!-- .ql-toolbar will be moved here by JS after Quill init -->
+        <div class="editor-scroll">
+          <div class="note-title-wrap"><input type="text" id="note-title" placeholder="Untitled Note"></div>
+          <div class="note-meta" id="note-meta"></div>
+          <button class="btn-add-section" id="btn-add-section"><i class="fas fa-plus"></i> Add Section</button>
+          <div class="editor-quill"><div id="quill-editor"></div></div>
+        </div>
       </div>
     </div>
 
@@ -1979,7 +1983,7 @@
     const $=s=>document.querySelector(s);
     const quill = new Quill('#quill-editor',{
       theme:'snow', placeholder:'Start writing your notes\u2026',
-      scrollingContainer:'.editor-body',
+      scrollingContainer:'.editor-scroll',
       modules:{
         history:{ delay:1000, maxStack:500, userOnly:true },
         toolbar:{
@@ -1997,14 +2001,23 @@
       }}
     });
 
+    /* ── Move toolbar outside scroll area so it stays fixed at top ── */
+    (function() {
+      var qlToolbar = document.querySelector('.ql-toolbar.ql-snow');
+      var editorBody = document.querySelector('.editor-body');
+      var editorScroll = document.querySelector('.editor-scroll');
+      if (qlToolbar && editorBody && editorScroll) {
+        editorBody.insertBefore(qlToolbar, editorScroll);
+      }
+    })();
+
     /* ── Keyboard shortcuts for undo/redo ── */
-    /* Native DOM listener to guarantee Cmd+Z/Ctrl+Z always works, since the
-       no-op toolbar handlers can suppress Quill's built-in keyboard bindings. */
+    var historyModule = quill.getModule('history');
     quill.root.addEventListener('keydown', function(e) {
       if ((e.ctrlKey || e.metaKey) && !e.altKey) {
-        if (e.key === 'z' && !e.shiftKey) { e.preventDefault(); quill.history.undo(); }
-        else if (e.key === 'z' && e.shiftKey) { e.preventDefault(); quill.history.redo(); }
-        else if (e.key === 'y' && !e.shiftKey) { e.preventDefault(); quill.history.redo(); }
+        if (e.key === 'z' && !e.shiftKey) { e.preventDefault(); historyModule.undo(); }
+        else if (e.key === 'z' && e.shiftKey) { e.preventDefault(); historyModule.redo(); }
+        else if (e.key === 'y' && !e.shiftKey) { e.preventDefault(); historyModule.redo(); }
       }
     });
 
@@ -2042,6 +2055,7 @@
       toolbar.addHandler('table-insert', function() { /* handled by click below */ });
 
       /* ── Undo / Redo (bypass Quill toolbar handler — clone buttons for direct listeners) ── */
+      var histMod = quill.getModule('history');
       var origUndo = document.querySelector('.ql-undo');
       if (origUndo) {
         var newUndo = origUndo.cloneNode(false);
@@ -2049,7 +2063,7 @@
         newUndo.title = 'Undo';
         newUndo.setAttribute('type', 'button');
         origUndo.parentNode.replaceChild(newUndo, origUndo);
-        newUndo.addEventListener('click', function(e) { e.preventDefault(); quill.history.undo(); });
+        newUndo.addEventListener('click', function(e) { e.preventDefault(); histMod.undo(); });
       }
       var origRedo = document.querySelector('.ql-redo');
       if (origRedo) {
@@ -2058,7 +2072,7 @@
         newRedo.title = 'Redo';
         newRedo.setAttribute('type', 'button');
         origRedo.parentNode.replaceChild(newRedo, origRedo);
-        newRedo.addEventListener('click', function(e) { e.preventDefault(); quill.history.redo(); });
+        newRedo.addEventListener('click', function(e) { e.preventDefault(); histMod.redo(); });
       }
     })();
 
@@ -2177,13 +2191,11 @@
 
       function insertTableAtCursor(rows, cols) {
         var range = quill.getSelection(true);
-        /* Build HTML table */
-        var html = '<table><thead><tr>';
-        for (var c = 0; c < cols; c++) html += '<th>Header ' + (c + 1) + '</th>';
-        html += '</tr></thead><tbody>';
-        for (var r = 0; r < rows - 1; r++) {
+        /* Build plain table — no headers, all blank cells */
+        var html = '<table><tbody>';
+        for (var r = 0; r < rows; r++) {
           html += '<tr>';
-          for (var c2 = 0; c2 < cols; c2++) html += '<td><br></td>';
+          for (var c = 0; c < cols; c++) html += '<td><br></td>';
           html += '</tr>';
         }
         html += '</tbody></table><p><br></p>';
@@ -2282,7 +2294,16 @@
         var info = extractTableData(table);
         var data = info.data;
         var hasHeader = info.hasHeader;
-        var colCount = data[0] ? data[0].length : 0;
+        /* Use the MAXIMUM column count across all rows (not just first row,
+           which may have been mangled by Quill if it was a header row) */
+        var colCount = 0;
+        for (var mc = 0; mc < data.length; mc++) {
+          if (data[mc].length > colCount) colCount = data[mc].length;
+        }
+        /* Pad any short rows to match the widest row */
+        for (var pr = 0; pr < data.length; pr++) {
+          while (data[pr].length < colCount) data[pr].push('<br>');
+        }
 
         /* Modify the data array */
         switch (action) {
@@ -2466,9 +2487,9 @@
           hideFloatBar();
         }
       });
-      var editorBody = document.querySelector('.editor-body');
-      if (editorBody) {
-        editorBody.addEventListener('scroll', function() {
+      var editorScrollEl = document.querySelector('.editor-scroll');
+      if (editorScrollEl) {
+        editorScrollEl.addEventListener('scroll', function() {
           if (ctxTargetCell && ctxTargetCell.closest('table')) {
             positionFloatBar(ctxTargetCell);
           }
@@ -3706,7 +3727,7 @@
     /* ── Load HTML into Quill safely (protects long data-URLs from being mangled) ── */
     function loadNoteHTML(html) {
       lastLoadedContent = html || '';
-      if (!html) { quill.setContents([{insert:'\n'}], 'silent'); quill.history.clear(); return; }
+      if (!html) { quill.setContents([{insert:'\n'}], 'silent'); quill.getModule('history').clear(); return; }
 
       /* Count expected images so we can verify later */
       var expectedImgs = (html.match(/<img\s/gi) || []).length;
@@ -3746,7 +3767,7 @@
         try { quill.update('silent'); } catch(e) { /* images display even if Quill state sync fails */ }
       }
 
-      quill.history.clear();
+      quill.getModule('history').clear();
     }
 
     function openNote(noteId) {
@@ -3818,8 +3839,8 @@
     /* ── Pinch-to-zoom on editor content only (CSS zoom) ── */
     (function() {
       var editorEl = document.querySelector('.ql-editor');
-      var editorBody = document.querySelector('.editor-body');
-      if (!editorEl || !editorBody) return;
+      var scrollArea = document.querySelector('.editor-scroll');
+      if (!editorEl || !scrollArea) return;
 
       var currentZoom = 1;
       var MIN_ZOOM = 0.5;
@@ -3827,7 +3848,7 @@
       var lastDist = 0;
       var isPinching = false;
 
-      editorBody.addEventListener('touchstart', function(e) {
+      scrollArea.addEventListener('touchstart', function(e) {
         if (e.touches.length === 2) {
           isPinching = true;
           lastDist = Math.hypot(
@@ -3837,7 +3858,7 @@
         }
       }, {passive: true});
 
-      editorBody.addEventListener('touchmove', function(e) {
+      scrollArea.addEventListener('touchmove', function(e) {
         if (e.touches.length === 2 && isPinching) {
           e.preventDefault();
           var dist = Math.hypot(
@@ -3853,7 +3874,7 @@
         }
       }, {passive: false});
 
-      editorBody.addEventListener('touchend', function(e) {
+      scrollArea.addEventListener('touchend', function(e) {
         if (e.touches.length < 2) {
           isPinching = false;
           lastDist = 0;
@@ -4035,7 +4056,8 @@
       });
 
       /* Reposition on scroll */
-      qlContainer.addEventListener('scroll', function() {
+      var imgScrollArea = document.querySelector('.editor-scroll') || qlContainer;
+      imgScrollArea.addEventListener('scroll', function() {
         if (activeImg && wrap && wrap.style.display !== 'none') positionWrap();
       });
 
