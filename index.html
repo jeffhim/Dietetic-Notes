@@ -2267,8 +2267,13 @@
 
         /* Delete table — simple case */
         if (action === 'deleteTable') {
+          quill.disable();
           table.remove();
-          scheduleSave();
+          var dhtml = quill.root.innerHTML;
+          quill.enable();
+          loadNoteHTML(dhtml);
+          if (saveTimer) clearTimeout(saveTimer);
+          saveCurrentNote();
           hideFloatBar();
           return;
         }
@@ -2328,27 +2333,53 @@
             break;
         }
 
-        /* Rebuild & swap in one DOM operation */
+        /* Rebuild table HTML */
         var newHTML = buildTableHTML(data, hasHeader);
-        var newTable = replaceTable(table, newHTML);
 
-        scheduleSave();
+        /* CRITICAL: Freeze Quill so its MutationObserver can't mangle the table */
+        quill.disable();
+
+        /* Replace old table with rebuilt one */
+        replaceTable(table, newHTML);
+
+        /* Capture the CORRECT full editor HTML while Quill is frozen */
+        var safeHTML = quill.root.innerHTML;
+
+        /* Re-enable Quill, then force-load the correct HTML via the
+           proven loadNoteHTML path (same one used to open notes) */
+        quill.enable();
+        loadNoteHTML(safeHTML);
+
+        /* Save */
+        if (saveTimer) clearTimeout(saveTimer);
+        saveCurrentNote();
 
         /* Re-select a cell in the rebuilt table and re-show floating bar */
-        var newRows = newTable.querySelectorAll('tr');
-        var safeRow = Math.min(rowIndex, newRows.length - 1);
-        if (safeRow < 0) safeRow = 0;
-        var targetRow = newRows[safeRow];
-        var safeCel = Math.min(cellIndex, targetRow.children.length - 1);
-        if (safeCel < 0) safeCel = 0;
-        ctxTargetCell = targetRow.children[safeCel];
-        if (ctxTargetCell) {
-          quill.root.querySelectorAll('.tbl-active-cell').forEach(function(c) { c.classList.remove('tbl-active-cell'); });
-          ctxTargetCell.classList.add('tbl-active-cell');
-          setTimeout(function() { positionFloatBar(ctxTargetCell); }, 20);
-        } else {
-          hideFloatBar();
-        }
+        setTimeout(function() {
+          var tables = quill.root.querySelectorAll('table');
+          if (!tables.length) { hideFloatBar(); return; }
+          makeTableCellsEditable();
+          /* Find the right table (closest to original position) */
+          var tbl = tables[tables.length - 1]; /* fallback to last */
+          for (var ti = 0; ti < tables.length; ti++) {
+            var trs = tables[ti].querySelectorAll('tr');
+            if (trs.length >= data.length) { tbl = tables[ti]; break; }
+          }
+          var newRows = tbl.querySelectorAll('tr');
+          var sr = Math.min(rowIndex, newRows.length - 1);
+          if (sr < 0) sr = 0;
+          var targetRow = newRows[sr];
+          var sc = Math.min(cellIndex, targetRow.children.length - 1);
+          if (sc < 0) sc = 0;
+          ctxTargetCell = targetRow.children[sc];
+          if (ctxTargetCell) {
+            quill.root.querySelectorAll('.tbl-active-cell').forEach(function(c) { c.classList.remove('tbl-active-cell'); });
+            ctxTargetCell.classList.add('tbl-active-cell');
+            positionFloatBar(ctxTargetCell);
+          } else {
+            hideFloatBar();
+          }
+        }, 60);
       }
 
       /* ── Floating Table Toolbar ── */
