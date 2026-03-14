@@ -739,6 +739,17 @@
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.js"></script>
   <script>
+    /* ── Global error handler: show crash info instead of white screen ── */
+    window.onerror = function(msg, url, line, col, err) {
+      document.body.style.background = '#fff';
+      document.body.style.color = '#000';
+      document.body.style.padding = '24px';
+      document.body.style.fontFamily = 'monospace';
+      document.body.innerHTML = '<h2 style="color:red">App Error</h2><pre>' +
+        msg + '\nLine: ' + line + ', Col: ' + col +
+        (err && err.stack ? '\n\n' + err.stack : '') + '</pre>';
+    };
+
     /* ── Always light mode (no dark mode) ────────── */
     document.documentElement.classList.remove('dark');
 
@@ -2340,6 +2351,7 @@
       var floatBar = document.getElementById('tbl-float-bar');
 
       function positionFloatBar(cell) {
+        if (!floatBar) return;
         if (!cell || !cell.closest('table')) { hideFloatBar(); return; }
         var table = cell.closest('table');
         var tableRect = table.getBoundingClientRect();
@@ -2359,7 +2371,7 @@
       }
 
       function hideFloatBar() {
-        floatBar.classList.remove('active');
+        if (floatBar) floatBar.classList.remove('active');
         /* Remove active cell highlight */
         quill.root.querySelectorAll('.tbl-active-cell').forEach(function(c) { c.classList.remove('tbl-active-cell'); });
       }
@@ -2406,7 +2418,7 @@
       }, {passive: true});
 
       /* Handle floating bar button clicks */
-      floatBar.addEventListener('click', function(e) {
+      if (floatBar) floatBar.addEventListener('click', function(e) {
         var btn = e.target.closest('.tbl-fb-btn');
         if (!btn) return;
         e.stopPropagation();
@@ -2430,7 +2442,7 @@
 
       /* Reposition on window resize */
       window.addEventListener('resize', function() {
-        if (floatBar.classList.contains('active') && ctxTargetCell) {
+        if (floatBar && floatBar.classList.contains('active') && ctxTargetCell) {
           positionFloatBar(ctxTargetCell);
         }
       });
@@ -3795,4 +3807,162 @@
           e.preventDefault();
           var dist = Math.hypot(
             e.touches[0].clientX - e.touches[1].clientX,
-            e.touches[0].clie...
+            e.touches[0].clientY - e.touches[1].clientY
+          );
+          if (lastDist > 0) {
+            var ratio = dist / lastDist;
+            currentZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, currentZoom * ratio));
+            editorEl.style.zoom = currentZoom;
+          }
+          lastDist = dist;
+        }
+      }, {passive: false});
+
+      editorBody.addEventListener('touchend', function(e) {
+        if (e.touches.length < 2) {
+          isPinching = false;
+          lastDist = 0;
+        }
+      }, {passive: true});
+    })();
+
+    /* ── Intercept pasted/dropped images → compress before insert ── */
+    /* Use capture:true + stopImmediatePropagation to prevent Quill's own
+       clipboard/uploader from ALSO inserting the image (causing duplicates) */
+    quill.root.addEventListener('paste', function(e) {
+      var cd = e.clipboardData;
+      if (!cd || !cd.items) return;
+      for (var i = 0; i < cd.items.length; i++) {
+        if (cd.items[i].type.indexOf('image') === 0) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          var file = cd.items[i].getAsFile();
+          if (!file) return;
+          (async function() {
+            var range = quill.getSelection(true);
+            try {
+              var dataUrl = await compressImage(file);
+              quill.insertEmbed(range.index, 'image', dataUrl, 'user');
+              quill.setSelection(range.index + 1, 0, 'silent');
+              /* Force immediate save */
+              if(saveTimer) clearTimeout(saveTimer);
+              saveCurrentNote();
+            } catch(err) {
+              quill.insertText(range.index, '[Image failed: '+err.message+']', {color:'#DC2626'}, 'user');
+            }
+          })();
+          return;
+        }
+      }
+    }, true);
+
+    quill.root.addEventListener('drop', function(e) {
+      if (!e.dataTransfer || !e.dataTransfer.files || !e.dataTransfer.files.length) return;
+      var file = e.dataTransfer.files[0];
+      if (!file || file.type.indexOf('image') !== 0) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      (async function() {
+        var range = quill.getSelection(true) || {index: quill.getLength()};
+        try {
+          var dataUrl = await compressImage(file);
+          quill.insertEmbed(range.index, 'image', dataUrl, 'user');
+          quill.setSelection(range.index + 1, 0, 'silent');
+          /* Force immediate save */
+          if(saveTimer) clearTimeout(saveTimer);
+          saveCurrentNote();
+        } catch(err) {
+          quill.insertText(range.index, '[Image failed: '+err.message+']', {color:'#DC2626'}, 'user');
+        }
+      })();
+    });
+
+    /* ═══ IMAGE RESIZE ═════════════════════════════════ */
+    (function() {
+      var qlContainer = document.querySelector('.ql-container');
+      var wrap = null;     /* the overlay element */
+      var activeImg = null; /* currently selected img */
+      var startX, startY, startW, startH, ratio, handleType;
+      var dragging = false;
+
+      function createWrap() {
+        wrap = document.createElement('div');
+        wrap.className = 'img-resize-wrap';
+        ['nw','ne','sw','se'].forEach(function(pos) {
+          var h = document.createElement('div');
+          h.className = 'img-handle h-' + pos;
+          h.dataset.handle = pos;
+          h.addEventListener('mousedown', onHandleDown);
+          h.addEventListener('touchstart', onHandleDown, { passive: false });
+          wrap.appendChild(h);
+        });
+        var info = document.createElement('div');
+        info.className = 'img-resize-info';
+        wrap.appendChild(info);
+        qlContainer.appendChild(wrap);
+      }
+
+      function selectImage(img) {
+        if (activeImg === img && wrap) return;
+        deselectImage();
+        activeImg = img;
+        if (!wrap) createWrap();
+        positionWrap();
+        wrap.style.display = 'block';
+      }
+
+      function deselectImage() {
+        activeImg = null;
+        if (wrap) wrap.style.display = 'none';
+      }
+
+      function positionWrap() {
+        if (!activeImg || !wrap) return;
+        var contRect = qlContainer.getBoundingClientRect();
+        var imgRect = activeImg.getBoundingClientRect();
+        wrap.style.left = (imgRect.left - contRect.left + qlContainer.scrollLeft) + 'px';
+        wrap.style.top = (imgRect.top - contRect.top + qlContainer.scrollTop) + 'px';
+        wrap.style.width = imgRect.width + 'px';
+        wrap.style.height = imgRect.height + 'px';
+        var infoEl = wrap.querySelector('.img-resize-info');
+        if (infoEl) infoEl.textContent = Math.round(imgRect.width) + ' × ' + Math.round(imgRect.height);
+      }
+
+      function getEventXY(e) {
+        if (e.touches && e.touches.length > 0) return { x: e.touches[0].clientX, y: e.touches[0].clientY };
+        return { x: e.clientX, y: e.clientY };
+      }
+
+      function onHandleDown(e) {
+        if (!activeImg) return;
+        e.preventDefault();
+        e.stopPropagation();
+        dragging = true;
+        handleType = e.currentTarget.dataset.handle;
+        var pos = getEventXY(e);
+        startX = pos.x;
+        startY = pos.y;
+        startW = activeImg.getBoundingClientRect().width;
+        startH = activeImg.getBoundingClientRect().height;
+        ratio = startH / startW;
+        document.addEventListener('mousemove', onHandleMove);
+        document.addEventListener('mouseup', onHandleUp);
+        document.addEventListener('touchmove', onHandleMove, { passive: false });
+        document.addEventListener('touchend', onHandleUp);
+      }
+
+      function onHandleMove(e) {
+        if (!dragging || !activeImg) return;
+        e.preventDefault();
+        var pos = getEventXY(e);
+        var dx = pos.x - startX;
+        var dy = pos.y - startY;
+        var newW = startW;
+
+        if (handleType === 'se') newW = startW + dx;
+        else if (handleType === 'sw') newW = startW - dx;
+        else if (handleType === 'ne') newW = startW + dx;
+        else if (handleType === 'nw') newW = startW - dx;
+
+        newW = Math.max(40, Math.min(newW, qlContainer.clientWidth - 40));
+        ac...
