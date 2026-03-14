@@ -2335,7 +2335,6 @@
             break;
         }
         makeTableCellsEditable();
-        try { quill.update('silent'); } catch(e) {}
         scheduleSave();
         /* Re-position floating bar if table still exists */
         if (action === 'deleteTable') {
