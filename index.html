@@ -2804,7 +2804,23 @@
       S.unsubs.push(store.onSnapshot('notes',items=>{
         S.notes={}; items.forEach(n=>{ if(!S.notes[n.specialtyId]) S.notes[n.specialtyId]=[]; S.notes[n.specialtyId].push(n); });
         renderCats(); renderSpecs(); renderNotes();
-        if(S.currentNoteId){ const all=Object.values(S.notes).flat(); if(!all.find(n=>n.id===S.currentNoteId)){S.currentNoteId=null; showView('view-notes');} }
+        if(S.currentNoteId){
+          const all=Object.values(S.notes).flat();
+          const openNote=all.find(n=>n.id===S.currentNoteId);
+          if(!openNote){ S.currentNoteId=null; showView('view-notes'); }
+          else {
+            /* Reload editor if content changed from another device.
+               Compare against lastLoadedContent (what we last loaded or saved)
+               instead of live editor HTML, to avoid infinite reload loops
+               caused by Quill normalising HTML differently from the server. */
+            var serverHTML = openNote.content || '';
+            if (serverHTML !== lastLoadedContent && !saveTimer) {
+              loadNoteHTML(serverHTML);
+              $('#note-title').value = openNote.title || '';
+              $('#note-meta').textContent = openNote.updatedAt ? 'Last updated: '+fmtDateLong(openNote.updatedAt) : '';
+            }
+          }
+        }
       }));
     }
 
@@ -3495,6 +3511,7 @@
 
     /* ── Load HTML into Quill safely (protects long data-URLs from being mangled) ── */
     function loadNoteHTML(html) {
+      lastLoadedContent = html || '';
       if (!html) { quill.setContents([{insert:'\n'}], 'silent'); quill.history.clear(); return; }
 
       /* Count expected images so we can verify later */
@@ -3562,14 +3579,17 @@
 
     /* ── Auto-save ────────────────────────────────── */
     let saveTimer=null;
+    var lastLoadedContent = null; /* tracks what we last loaded/saved to detect real remote changes */
     function scheduleSave(delta, oldDelta, source) { if(source && source !== 'user') return; if(saveTimer) clearTimeout(saveTimer); saveTimer=setTimeout(saveCurrentNote,1000); }
     async function saveCurrentNote() {
+      saveTimer=null; /* reset so onSnapshot sync check works */
       if(!S.currentNoteId||!store) return;
       const title=$('#note-title').value.trim()||'Untitled Note';
       const content=quill.root.innerHTML;
       const ss=$('#save-status');
       ss.innerHTML='<i class="fas fa-circle-notch fa-spin"></i> Saving\u2026'; ss.className='save-status saving';
       try{ await store.update('notes',S.currentNoteId,{title,content});
+        lastLoadedContent = content; /* track what we saved so onSnapshot won't reload it */
         ss.innerHTML='<i class="fas fa-check"></i> Saved'; ss.className='save-status saved';
       }catch(e){
         var msg = (e.message && e.message.indexOf('exceeds the maximum') !== -1) ? 'Note too large — try removing some images' : 'Save error';
@@ -3648,12 +3668,15 @@
     })();
 
     /* ── Intercept pasted/dropped images → compress before insert ── */
+    /* Use capture:true + stopImmediatePropagation to prevent Quill's own
+       clipboard/uploader from ALSO inserting the image (causing duplicates) */
     quill.root.addEventListener('paste', function(e) {
       var cd = e.clipboardData;
       if (!cd || !cd.items) return;
       for (var i = 0; i < cd.items.length; i++) {
         if (cd.items[i].type.indexOf('image') === 0) {
           e.preventDefault();
+          e.stopImmediatePropagation();
           var file = cd.items[i].getAsFile();
           if (!file) return;
           (async function() {
@@ -3662,7 +3685,7 @@
               var dataUrl = await compressImage(file);
               quill.insertEmbed(range.index, 'image', dataUrl, 'user');
               quill.setSelection(range.index + 1, 0, 'silent');
-              /* Force immediate save — don't rely on text-change event */
+              /* Force immediate save */
               if(saveTimer) clearTimeout(saveTimer);
               saveCurrentNote();
             } catch(err) {
@@ -3672,13 +3695,14 @@
           return;
         }
       }
-    });
+    }, true);
 
     quill.root.addEventListener('drop', function(e) {
       if (!e.dataTransfer || !e.dataTransfer.files || !e.dataTransfer.files.length) return;
       var file = e.dataTransfer.files[0];
       if (!file || file.type.indexOf('image') !== 0) return;
       e.preventDefault();
+      e.stopImmediatePropagation();
       (async function() {
         var range = quill.getSelection(true) || {index: quill.getLength()};
         try {
