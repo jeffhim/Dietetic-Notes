@@ -455,6 +455,19 @@
     .tbl-ctx-item.danger i { color:var(--c-danger); }
     .tbl-ctx-sep { height:1px; background:var(--c-border); margin:4px 0; }
 
+    /* Floating table toolbar */
+    .tbl-float-bar { display:none; position:fixed; z-index:150; background:#FFFFFF; border:1px solid #CBD5E1; border-radius:10px; box-shadow:0 4px 20px rgba(0,0,0,0.13); padding:4px 6px; gap:2px; align-items:center; white-space:nowrap; }
+    .tbl-float-bar.active { display:flex; animation:scaleIn .12s ease; }
+    .tbl-fb-btn { display:flex; flex-direction:column; align-items:center; gap:1px; padding:6px 8px; border:none; background:none; border-radius:6px; cursor:pointer; color:#475569; font-size:11px; font-weight:600; font-family:var(--font-main); transition:background .1s; min-width:36px; }
+    .tbl-fb-btn:hover, .tbl-fb-btn:active { background:#E6EDEB; }
+    .tbl-fb-btn i { font-size:13px; color:#14B8A6; }
+    .tbl-fb-btn span { font-size:9px; line-height:1; }
+    .tbl-fb-danger i { color:#EF4444; }
+    .tbl-fb-danger:hover, .tbl-fb-danger:active { background:#FEE2E2; }
+    .tbl-fb-sep { width:1px; height:28px; background:#CBD5E1; margin:0 2px; flex-shrink:0; }
+    /* Highlight active cell in table */
+    .ql-editor table td.tbl-active-cell, .ql-editor table th.tbl-active-cell { outline:2px solid #2DD4BF; outline-offset:-2px; background:rgba(45,212,191,0.08); }
+
     /* Custom table toolbar button */
     .ql-table-insert { position:relative; }
     .ql-toolbar .ql-table-insert svg { width:18px; height:18px; }
@@ -624,7 +637,19 @@
     <button class="fab" id="fab-add"><i class="fas fa-plus"></i></button>
   </div>
 
-  <!-- Table context menu -->
+  <!-- Floating table toolbar (appears when tapping a cell) -->
+  <div class="tbl-float-bar" id="tbl-float-bar">
+    <button class="tbl-fb-btn" data-action="addRowAbove" title="Insert row above"><i class="fas fa-arrow-up"></i><span>Row</span></button>
+    <button class="tbl-fb-btn" data-action="addRowBelow" title="Insert row below"><i class="fas fa-arrow-down"></i><span>Row</span></button>
+    <div class="tbl-fb-sep"></div>
+    <button class="tbl-fb-btn" data-action="addColLeft" title="Insert column left"><i class="fas fa-arrow-left"></i><span>Col</span></button>
+    <button class="tbl-fb-btn" data-action="addColRight" title="Insert column right"><i class="fas fa-arrow-right"></i><span>Col</span></button>
+    <div class="tbl-fb-sep"></div>
+    <button class="tbl-fb-btn tbl-fb-danger" data-action="deleteRow" title="Delete row"><i class="fas fa-minus"></i><span>Row</span></button>
+    <button class="tbl-fb-btn tbl-fb-danger" data-action="deleteCol" title="Delete column"><i class="fas fa-columns"></i><span>Col</span></button>
+    <button class="tbl-fb-btn tbl-fb-danger" data-action="deleteTable" title="Delete table"><i class="fas fa-trash"></i></button>
+  </div>
+  <!-- Table context menu (right-click / long-press fallback) -->
   <div class="tbl-ctx-menu" id="tbl-ctx-menu">
     <div class="tbl-ctx-item" data-action="addRowAbove"><i class="fas fa-arrow-up"></i>Insert row above</div>
     <div class="tbl-ctx-item" data-action="addRowBelow"><i class="fas fa-arrow-down"></i>Insert row below</div>
@@ -714,11 +739,8 @@
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.js"></script>
   <script>
-    /* ── Dark mode ────────────────────────────────── */
-    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) document.documentElement.classList.add('dark');
-    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
-      e.matches ? document.documentElement.classList.add('dark') : document.documentElement.classList.remove('dark');
-    });
+    /* ── Always light mode (no dark mode) ────────── */
+    document.documentElement.classList.remove('dark');
 
     /* ═══ DATA LAYER ══════════════════════════════════ */
     class InMemoryStore {
@@ -1964,6 +1986,30 @@
       }}
     });
 
+    /* ── Strip black/dark inline font colors from pasted content ── */
+    /* When copying from external sources, text often has color:black or color:rgb(0,0,0)
+       inline. Since the app is always light mode, these are redundant and would cause
+       issues if dark mode is ever re-enabled. Strip them so default text color applies. */
+    (function() {
+      var clipboard = quill.getModule('clipboard');
+      clipboard.addMatcher(Node.ELEMENT_NODE, function(node, delta) {
+        delta.ops.forEach(function(op) {
+          if (op.attributes && op.attributes.color) {
+            var c = op.attributes.color.toLowerCase().replace(/\s/g, '');
+            /* Remove black, near-black, and common default dark colors */
+            if (c === '#000000' || c === '#000' || c === 'black' ||
+                c === 'rgb(0,0,0)' || c === 'rgba(0,0,0,1)' ||
+                c === '#0f1729' || c === '#333' || c === '#333333' ||
+                c === 'rgb(51,51,51)' || c === 'rgb(15,23,41)' ||
+                c === 'windowtext') {
+              delete op.attributes.color;
+            }
+          }
+        });
+        return delta;
+      });
+    })();
+
     /* ── Custom link handler (prompt() is blocked in sandbox) ── */
     (function() {
       var toolbar = quill.getModule('toolbar');
@@ -2164,96 +2210,8 @@
         setTimeout(makeTableCellsEditable, 30);
       });
 
-      /* ── Context Menu for Tables ── */
-      var ctxMenu = document.getElementById('tbl-ctx-menu');
+      /* ── Shared table helper functions ── */
       var ctxTargetCell = null;
-
-      /* Show context menu on right-click inside table */
-      quill.root.addEventListener('contextmenu', function(e) {
-        var cell = e.target.closest('td, th');
-        if (!cell) { ctxMenu.classList.remove('active'); return; }
-        e.preventDefault();
-        ctxTargetCell = cell;
-        ctxMenu.style.left = e.clientX + 'px';
-        ctxMenu.style.top = e.clientY + 'px';
-        ctxMenu.classList.add('active');
-        /* Adjust if overflows viewport */
-        var rect = ctxMenu.getBoundingClientRect();
-        if (rect.right > window.innerWidth) ctxMenu.style.left = (window.innerWidth - rect.width - 8) + 'px';
-        if (rect.bottom > window.innerHeight) ctxMenu.style.top = (window.innerHeight - rect.height - 8) + 'px';
-      });
-
-      /* Hide context menu */
-      document.addEventListener('click', function() { ctxMenu.classList.remove('active'); });
-      document.addEventListener('scroll', function() { ctxMenu.classList.remove('active'); }, true);
-
-      /* Handle context menu actions */
-      ctxMenu.addEventListener('click', function(e) {
-        var item = e.target.closest('.tbl-ctx-item');
-        if (!item || !ctxTargetCell) return;
-        var action = item.dataset.action;
-        var table = ctxTargetCell.closest('table');
-        var row = ctxTargetCell.closest('tr');
-        if (!table || !row) return;
-
-        var cellIndex = Array.from(row.children).indexOf(ctxTargetCell);
-        var rowIndex = Array.from(row.parentNode.children).indexOf(row);
-        var colCount = row.children.length;
-
-        switch (action) {
-          case 'addRowAbove':
-            var newRow = createEmptyRow(colCount, false);
-            row.parentNode.insertBefore(newRow, row);
-            /* If adding above thead row, move into tbody */
-            if (row.parentNode.tagName === 'THEAD') {
-              var tbody = table.querySelector('tbody');
-              if (!tbody) { tbody = document.createElement('tbody'); table.appendChild(tbody); }
-              tbody.insertBefore(newRow, tbody.firstChild);
-            }
-            break;
-          case 'addRowBelow':
-            var newRowB = createEmptyRow(colCount, false);
-            if (row.parentNode.tagName === 'THEAD') {
-              var tbodyB = table.querySelector('tbody');
-              if (!tbodyB) { tbodyB = document.createElement('tbody'); table.appendChild(tbodyB); }
-              tbodyB.insertBefore(newRowB, tbodyB.firstChild);
-            } else {
-              row.parentNode.insertBefore(newRowB, row.nextSibling);
-            }
-            break;
-          case 'addColLeft':
-            addColumn(table, cellIndex);
-            break;
-          case 'addColRight':
-            addColumn(table, cellIndex + 1);
-            break;
-          case 'deleteRow':
-            if (table.querySelectorAll('tr').length > 1) {
-              row.remove();
-            } else {
-              table.nextElementSibling; table.remove();
-            }
-            break;
-          case 'deleteCol':
-            if (colCount > 1) {
-              table.querySelectorAll('tr').forEach(function(r) {
-                if (r.children[cellIndex]) r.children[cellIndex].remove();
-              });
-            } else {
-              table.remove();
-            }
-            break;
-          case 'deleteTable':
-            table.remove();
-            break;
-          case 'toggleHeader':
-            toggleHeaderRow(table);
-            break;
-        }
-        ctxMenu.classList.remove('active');
-        makeTableCellsEditable();
-        scheduleSave();
-      });
 
       function createEmptyRow(colCount, isHeader) {
         var tr = document.createElement('tr');
@@ -2284,7 +2242,6 @@
         var thead = table.querySelector('thead');
         var tbody = table.querySelector('tbody');
         if (thead && thead.rows.length > 0) {
-          /* Convert header to regular row */
           if (!tbody) { tbody = document.createElement('tbody'); table.appendChild(tbody); }
           var hrow = thead.rows[0];
           var newRow = document.createElement('tr');
@@ -2297,7 +2254,6 @@
           tbody.insertBefore(newRow, tbody.firstChild);
           thead.remove();
         } else {
-          /* Convert first body row to header */
           if (!tbody || !tbody.rows.length) return;
           var firstRow = tbody.rows[0];
           thead = document.createElement('thead');
@@ -2314,7 +2270,203 @@
         }
       }
 
-      /* Also support long-press for mobile */
+      /* Execute a table action on ctxTargetCell */
+      function execTableAction(action) {
+        if (!ctxTargetCell) return;
+        var table = ctxTargetCell.closest('table');
+        var row = ctxTargetCell.closest('tr');
+        if (!table || !row) return;
+        var cellIndex = Array.from(row.children).indexOf(ctxTargetCell);
+        var colCount = row.children.length;
+
+        switch (action) {
+          case 'addRowAbove':
+            var newRow = createEmptyRow(colCount, false);
+            if (row.parentNode.tagName === 'THEAD') {
+              var tbody = table.querySelector('tbody');
+              if (!tbody) { tbody = document.createElement('tbody'); table.appendChild(tbody); }
+              tbody.insertBefore(newRow, tbody.firstChild);
+            } else {
+              row.parentNode.insertBefore(newRow, row);
+            }
+            break;
+          case 'addRowBelow':
+            var newRowB = createEmptyRow(colCount, false);
+            if (row.parentNode.tagName === 'THEAD') {
+              var tbodyB = table.querySelector('tbody');
+              if (!tbodyB) { tbodyB = document.createElement('tbody'); table.appendChild(tbodyB); }
+              tbodyB.insertBefore(newRowB, tbodyB.firstChild);
+            } else {
+              row.parentNode.insertBefore(newRowB, row.nextSibling);
+            }
+            break;
+          case 'addColLeft':
+            addColumn(table, cellIndex);
+            break;
+          case 'addColRight':
+            addColumn(table, cellIndex + 1);
+            break;
+          case 'deleteRow':
+            if (table.querySelectorAll('tr').length > 1) {
+              row.remove();
+            } else {
+              table.remove();
+            }
+            break;
+          case 'deleteCol':
+            if (colCount > 1) {
+              table.querySelectorAll('tr').forEach(function(r) {
+                if (r.children[cellIndex]) r.children[cellIndex].remove();
+              });
+            } else {
+              table.remove();
+            }
+            break;
+          case 'deleteTable':
+            table.remove();
+            break;
+          case 'toggleHeader':
+            toggleHeaderRow(table);
+            break;
+        }
+        makeTableCellsEditable();
+        scheduleSave();
+        /* Re-position floating bar if table still exists */
+        if (action === 'deleteTable') {
+          hideFloatBar();
+        } else if (ctxTargetCell.closest('table')) {
+          setTimeout(function() { positionFloatBar(ctxTargetCell); }, 30);
+        } else {
+          hideFloatBar();
+        }
+      }
+
+      /* ── Floating Table Toolbar ── */
+      var floatBar = document.getElementById('tbl-float-bar');
+
+      function positionFloatBar(cell) {
+        if (!cell || !cell.closest('table')) { hideFloatBar(); return; }
+        var table = cell.closest('table');
+        var tableRect = table.getBoundingClientRect();
+        var barW = 340; /* approx width */
+        /* Position above the table, centered */
+        var left = tableRect.left + (tableRect.width - barW) / 2;
+        var top = tableRect.top - 48;
+        /* If above viewport, place below table */
+        if (top < 4) top = tableRect.bottom + 4;
+        /* Clamp to viewport */
+        if (left < 4) left = 4;
+        if (left + barW > window.innerWidth - 4) left = window.innerWidth - barW - 4;
+        if (top + 48 > window.innerHeight) top = window.innerHeight - 52;
+        floatBar.style.left = left + 'px';
+        floatBar.style.top = top + 'px';
+        floatBar.classList.add('active');
+      }
+
+      function hideFloatBar() {
+        floatBar.classList.remove('active');
+        /* Remove active cell highlight */
+        quill.root.querySelectorAll('.tbl-active-cell').forEach(function(c) { c.classList.remove('tbl-active-cell'); });
+      }
+
+      /* Show floating bar when clicking/tapping inside a table cell */
+      function onCellFocus(cell) {
+        if (!cell) { hideFloatBar(); return; }
+        ctxTargetCell = cell;
+        /* Highlight active cell */
+        quill.root.querySelectorAll('.tbl-active-cell').forEach(function(c) { c.classList.remove('tbl-active-cell'); });
+        cell.classList.add('tbl-active-cell');
+        positionFloatBar(cell);
+      }
+
+      /* Listen for clicks on editor */
+      quill.root.addEventListener('click', function(e) {
+        var cell = e.target.closest('td, th');
+        if (cell) {
+          onCellFocus(cell);
+        } else {
+          hideFloatBar();
+        }
+      });
+
+      /* Listen for touch on mobile */
+      quill.root.addEventListener('touchend', function(e) {
+        setTimeout(function() {
+          var active = document.activeElement;
+          var cell = null;
+          if (active && (active.tagName === 'TD' || active.tagName === 'TH')) {
+            cell = active;
+          } else {
+            /* Check selection */
+            var sel = window.getSelection();
+            if (sel && sel.anchorNode) {
+              var el = sel.anchorNode.nodeType === 1 ? sel.anchorNode : sel.anchorNode.parentElement;
+              cell = el ? el.closest('td, th') : null;
+            }
+          }
+          if (cell && cell.closest('.ql-editor')) {
+            onCellFocus(cell);
+          }
+        }, 100);
+      }, {passive: true});
+
+      /* Handle floating bar button clicks */
+      floatBar.addEventListener('click', function(e) {
+        var btn = e.target.closest('.tbl-fb-btn');
+        if (!btn) return;
+        e.stopPropagation();
+        execTableAction(btn.dataset.action);
+      });
+
+      /* Hide floating bar when clicking outside table/bar, or scrolling */
+      document.addEventListener('click', function(e) {
+        if (!e.target.closest('.tbl-float-bar') && !e.target.closest('td') && !e.target.closest('th')) {
+          hideFloatBar();
+        }
+      });
+      var editorBody = document.querySelector('.editor-body');
+      if (editorBody) {
+        editorBody.addEventListener('scroll', function() {
+          if (ctxTargetCell && ctxTargetCell.closest('table')) {
+            positionFloatBar(ctxTargetCell);
+          }
+        }, {passive: true});
+      }
+
+      /* Reposition on window resize */
+      window.addEventListener('resize', function() {
+        if (floatBar.classList.contains('active') && ctxTargetCell) {
+          positionFloatBar(ctxTargetCell);
+        }
+      });
+
+      /* ── Context Menu for Tables (right-click / long-press fallback) ── */
+      var ctxMenu = document.getElementById('tbl-ctx-menu');
+
+      quill.root.addEventListener('contextmenu', function(e) {
+        var cell = e.target.closest('td, th');
+        if (!cell) { ctxMenu.classList.remove('active'); return; }
+        e.preventDefault();
+        ctxTargetCell = cell;
+        ctxMenu.style.left = e.clientX + 'px';
+        ctxMenu.style.top = e.clientY + 'px';
+        ctxMenu.classList.add('active');
+        var rect = ctxMenu.getBoundingClientRect();
+        if (rect.right > window.innerWidth) ctxMenu.style.left = (window.innerWidth - rect.width - 8) + 'px';
+        if (rect.bottom > window.innerHeight) ctxMenu.style.top = (window.innerHeight - rect.height - 8) + 'px';
+      });
+
+      document.addEventListener('click', function() { ctxMenu.classList.remove('active'); });
+      document.addEventListener('scroll', function() { ctxMenu.classList.remove('active'); }, true);
+
+      ctxMenu.addEventListener('click', function(e) {
+        var item = e.target.closest('.tbl-ctx-item');
+        if (!item || !ctxTargetCell) return;
+        ctxMenu.classList.remove('active');
+        execTableAction(item.dataset.action);
+      });
+
+      /* Long-press for mobile context menu */
       var longPressTimer = null;
       quill.root.addEventListener('touchstart', function(e) {
         var cell = e.target.closest('td, th');
@@ -3371,899 +3523,4 @@
           }
 
           /* Reset styles */
-          dragItem.classList.remove('dragging');
-          dragItem.style.position = '';
-          dragItem.style.left = '';
-          dragItem.style.top = '';
-          dragItem.style.width = '';
-          dragItem.style.zIndex = '';
-          dragItem.style.pointerEvents = '';
-          document.body.style.userSelect = '';
-          document.body.style.webkitUserSelect = '';
-
-          /* Read new order from DOM and save */
-          var newOrder = Array.from(listEl.querySelectorAll(getItemSelector())).map(function(el) { return el.getAttribute('data-id'); });
-          saveNewOrder(collectionName, newOrder);
-          dragItem = null;
-          placeholder = null;
-        }
-
-        /* ── Touch events (long-press to start) ───── */
-        handle.addEventListener('touchstart', function(e) {
-          if (e.touches.length !== 1) return;
-          e.preventDefault();
-          e.stopPropagation();
-          var touch = e.touches[0];
-          longPressTimer = setTimeout(function() {
-            startDrag(touch.clientY);
-            /* Haptic feedback if available */
-            if (navigator.vibrate) navigator.vibrate(30);
-          }, 300);
-        }, { passive: false });
-
-        handle.addEventListener('touchmove', function(e) {
-          if (longPressTimer && !isDragging) {
-            clearTimeout(longPressTimer);
-            longPressTimer = null;
-            return;
-          }
-          if (!isDragging) return;
-          e.preventDefault();
-          e.stopPropagation();
-          moveDrag(e.touches[0].clientY);
-        }, { passive: false });
-
-        handle.addEventListener('touchend', function(e) {
-          if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
-          if (isDragging) {
-            e.preventDefault();
-            endDrag();
-          }
-        }, { passive: false });
-
-        handle.addEventListener('touchcancel', function() {
-          if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
-          if (isDragging) endDrag();
-        });
-
-        /* ── Mouse events (click-drag on handle) ──── */
-        handle.addEventListener('mousedown', function(e) {
-          e.preventDefault();
-          e.stopPropagation();
-          startDrag(e.clientY);
-
-          function onMouseMove(ev) {
-            ev.preventDefault();
-            moveDrag(ev.clientY);
-          }
-          function onMouseUp(ev) {
-            document.removeEventListener('mousemove', onMouseMove);
-            document.removeEventListener('mouseup', onMouseUp);
-            endDrag();
-          }
-          document.addEventListener('mousemove', onMouseMove);
-          document.addEventListener('mouseup', onMouseUp);
-        });
-      });
-    }
-
-    async function saveNewOrder(collectionName, orderedIds) {
-      if (!store) { dragReorderActive = false; return; }
-      try {
-        for (var i = 0; i < orderedIds.length; i++) {
-          await store.update(collectionName, orderedIds[i], { order: i });
-        }
-      } catch (err) {
-        /* Silently fail — next render will restore correct order from Firebase */
-      }
-      dragReorderActive = false;
-    }
-
-    /* ═══ CRUD ════════════════════════════════════════ */
-    function createCategory() {
-      showDialog({ title:'New Category', message:'Enter category name:', input:true, placeholder:'e.g. Clinical Dietetics',
-        input2:true, input2label:'What do you call the 2nd layer?', placeholder2:'Specialty', hint2:'e.g. Specialty, Type, Topic',
-        confirmText:'Create',
-        onConfirm:(n,sub)=>{ if(n) store.add('categories',{name:n,sublabel:sub||'Specialty',order:S.categories.length,template:[]}); }});
-    }
-    function createSpecialty() {
-      const cat=S.categories.find(c=>c.id===S.currentCatId);
-      const sub=getSublabel(cat);
-      showDialog({ title:'New '+sub, message:'Enter '+sub.toLowerCase()+' name:', input:true, placeholder:'e.g. Renal Nutrition', confirmText:'Create',
-        onConfirm:n=>{ if(n) store.add('specialties',{name:n,categoryId:S.currentCatId,order:(S.specialties[S.currentCatId]||[]).length,template:[]}); }});
-    }
-    function createNote() { openNewNoteDialog(); }
-    function deleteCategory(id,name) {
-      showDialog({ title:'Delete Category', message:'Delete "'+name+'" and all contents?', confirmText:'Delete', confirmClass:'btn-dialog-danger',
-        onConfirm:()=>{ const ops=[{col:'categories',id}]; (S.specialties[id]||[]).forEach(s=>{ ops.push({col:'specialties',id:s.id}); (S.notes[s.id]||[]).forEach(n=>ops.push({col:'notes',id:n.id})); }); store.batchRemove(ops); }});
-    }
-    function deleteSpecialty(id,name) {
-      const cat=S.categories.find(c=>c.id===S.currentCatId);
-      const sub=getSublabel(cat);
-      showDialog({ title:'Delete '+sub, message:'Delete "'+name+'" and all notes?', confirmText:'Delete', confirmClass:'btn-dialog-danger',
-        onConfirm:()=>{ const ops=[{col:'specialties',id}]; (S.notes[id]||[]).forEach(n=>ops.push({col:'notes',id:n.id})); store.batchRemove(ops); }});
-    }
-    function deleteNote(id,title) {
-      showDialog({ title:'Delete Note', message:'Delete "'+(title||'Untitled Note')+'"?', confirmText:'Delete', confirmClass:'btn-dialog-danger',
-        onConfirm:()=>{ store.remove('notes',id); if(S.currentNoteId===id){S.currentNoteId=null; showView('view-notes');} }});
-    }
-    function renameItem(col,id,cur) {
-      if(col==='categories'){
-        const catObj=S.categories.find(c=>c.id===id);
-        const curSub=getSublabel(catObj);
-        showDialog({ title:'Edit Category', message:'Category name:', input:true, placeholder:cur,
-          input2:true, input2label:'2nd layer label:', placeholder2:curSub, hint2:'e.g. Specialty, Type, Topic',
-          confirmText:'Save',
-          onConfirm:(n,sub)=>{ if(n) store.update(col,id,{name:n,sublabel:sub||curSub}); }});
-      } else {
-        const cat=S.categories.find(c=>c.id===S.currentCatId);
-        const sub=getSublabel(cat);
-        showDialog({ title:'Rename '+sub, message:'Enter new name:', input:true, placeholder:cur, confirmText:'Rename',
-          onConfirm:n=>{ if(n) store.update(col,id,{name:n}); }});
-      }
-    }
-    function renameNote(id,cur) {
-      showDialog({ title:'Rename Note', message:'Enter new title:', input:true, placeholder:cur||'Untitled Note', confirmText:'Rename',
-        onConfirm:n=>{ if(!n)return; store.update('notes',id,{title:n}); if(S.currentNoteId===id) $('#note-title').value=n; }});
-    }
-
-    /* ═══ EDITOR ══════════════════════════════════════ */
-
-    /* ── Load HTML into Quill safely (protects long data-URLs from being mangled) ── */
-    function loadNoteHTML(html) {
-      lastLoadedContent = html || '';
-      if (!html) { quill.setContents([{insert:'\n'}], 'silent'); quill.history.clear(); return; }
-
-      /* Count expected images so we can verify later */
-      var expectedImgs = (html.match(/<img\s/gi) || []).length;
-
-      /* 1. Parse HTML and swap long image srcs with short data:-protocol placeholders
-            (must be data: protocol so Quill's Image.sanitize() doesn't strip them) */
-      var tmp = document.createElement('div');
-      tmp.innerHTML = html;
-      var imgEls = tmp.querySelectorAll('img[src]');
-      var srcMap = {};
-      imgEls.forEach(function(img, i) {
-        var src = img.getAttribute('src');
-        if (src && src.length > 200) {
-          var key = 'data:,IMG' + i;
-          srcMap[key] = src;
-          img.setAttribute('src', key);
-        }
-      });
-
-      /* 2. Let Quill convert the lightweight HTML → Delta */
-      var delta = quill.clipboard.convert({html: tmp.innerHTML});
-
-      /* 3. Restore real image sources in the delta ops */
-      delta.ops.forEach(function(op) {
-        if (op.insert && op.insert.image && srcMap[op.insert.image]) {
-          op.insert.image = srcMap[op.insert.image];
-        }
-      });
-
-      /* 4. Apply to editor */
-      quill.setContents(delta, 'silent');
-
-      /* 5. Verify images survived conversion — fallback to innerHTML if any were lost */
-      var actualImgs = quill.root.querySelectorAll('img').length;
-      if (actualImgs < expectedImgs) {
-        quill.root.innerHTML = html;
-        try { quill.update('silent'); } catch(e) { /* images display even if Quill state sync fails */ }
-      }
-
-      quill.history.clear();
-    }
-
-    function openNote(noteId) {
-      saveCurrentNote();
-      S.currentNoteId=noteId;
-      let noteData=null;
-      for(const k of Object.keys(S.notes)){ const f=S.notes[k].find(n=>n.id===noteId); if(f){noteData=f;break;} }
-      if(!noteData) return;
-      const cat=S.categories.find(c=>c.id===S.currentCatId);
-      let specObj=null; (S.specialties[S.currentCatId]||[]).forEach(sp=>{ if(sp.id===S.currentSpecId) specObj=sp; });
-      $('#editor-crumb').innerHTML = (cat?esc(cat.name):'') + ' <span style="color:var(--c-text-muted);font-size:12px;font-family:var(--font-main)"> &rsaquo; ' + (specObj?esc(specObj.name):'') + '</span>';
-      $('#note-title').value=noteData.title||'';
-      $('#note-meta').textContent=noteData.updatedAt ? 'Last updated: '+fmtDateLong(noteData.updatedAt) : '';
-      /* Load note content — protect base64 images from Quill's HTML conversion */
-      loadNoteHTML(noteData.content || '');
-      /* Record to search history */
-      var crumbParts = [];
-      if (cat) crumbParts.push(cat.name);
-      if (specObj) crumbParts.push(specObj.name);
-      addToHistory({ type:'note', id:noteId, name:noteData.title||'Untitled Note', crumb:crumbParts.join(' \u203A '), catId:S.currentCatId, specId:S.currentSpecId });
-      showView('view-editor');
-    }
-    $('#back-to-notes').addEventListener('click',()=>{ saveCurrentNote(); S.currentNoteId=null; showView('view-notes'); });
-
-    /* ── Auto-save ────────────────────────────────── */
-    let saveTimer=null;
-    var lastLoadedContent = null; /* tracks what we last loaded/saved to detect real remote changes */
-    function scheduleSave(delta, oldDelta, source) { if(source && source !== 'user') return; if(saveTimer) clearTimeout(saveTimer); saveTimer=setTimeout(saveCurrentNote,1000); }
-    async function saveCurrentNote() {
-      saveTimer=null; /* reset so onSnapshot sync check works */
-      if(!S.currentNoteId||!store) return;
-      const title=$('#note-title').value.trim()||'Untitled Note';
-      const content=quill.root.innerHTML;
-      const ss=$('#save-status');
-      ss.innerHTML='<i class="fas fa-circle-notch fa-spin"></i> Saving\u2026'; ss.className='save-status saving';
-      try{ await store.update('notes',S.currentNoteId,{title,content});
-        lastLoadedContent = content; /* track what we saved so onSnapshot won't reload it */
-        ss.innerHTML='<i class="fas fa-check"></i> Saved'; ss.className='save-status saved';
-      }catch(e){
-        var msg = (e.message && e.message.indexOf('exceeds the maximum') !== -1) ? 'Note too large — try removing some images' : 'Save error';
-        ss.innerHTML='<i class="fas fa-exclamation-circle"></i> ' + msg; ss.className='save-status error';
-      }
-    }
-    quill.on('text-change',scheduleSave);
-    $('#note-title').addEventListener('input',scheduleSave);
-
-    /* ── Add Section button ── */
-    var addSecCursorPos = null;
-    $('#btn-add-section').addEventListener('click', function() {
-      /* Remember cursor position before dialog opens */
-      var sel = quill.getSelection();
-      addSecCursorPos = sel ? sel.index : null;
-      showDialog({ title:'Add Section', message:'Enter section heading:', input:true, placeholder:'e.g. Dietetic Assessment', confirmText:'Add',
-        onConfirm:function(name) {
-          if (!name) return;
-          /* Insert at cursor position, or end if no cursor */
-          var insertAt = (addSecCursorPos !== null) ? addSecCursorPos : Math.max(quill.getLength() - 1, 0);
-          quill.insertText(insertAt, '\n', 'user');
-          quill.insertText(insertAt + 1, name, 'user');
-          quill.formatLine(insertAt + 1, name.length, 'header', 2, 'user');
-          var newPos = insertAt + 1 + name.length;
-          quill.insertText(newPos, '\n', 'user');
-          quill.setSelection(newPos + 1, 0, 'user');
-          quill.focus();
-        }
-      });
-    });
-
-    /* ── Pinch-to-zoom on editor content only (CSS zoom) ── */
-    (function() {
-      var editorEl = document.querySelector('.ql-editor');
-      var editorBody = document.querySelector('.editor-body');
-      if (!editorEl || !editorBody) return;
-
-      var currentZoom = 1;
-      var MIN_ZOOM = 0.5;
-      var MAX_ZOOM = 3;
-      var lastDist = 0;
-      var isPinching = false;
-
-      editorBody.addEventListener('touchstart', function(e) {
-        if (e.touches.length === 2) {
-          isPinching = true;
-          lastDist = Math.hypot(
-            e.touches[0].clientX - e.touches[1].clientX,
-            e.touches[0].clientY - e.touches[1].clientY
-          );
-        }
-      }, {passive: true});
-
-      editorBody.addEventListener('touchmove', function(e) {
-        if (e.touches.length === 2 && isPinching) {
-          e.preventDefault();
-          var dist = Math.hypot(
-            e.touches[0].clientX - e.touches[1].clientX,
-            e.touches[0].clientY - e.touches[1].clientY
-          );
-          if (lastDist > 0) {
-            var ratio = dist / lastDist;
-            currentZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, currentZoom * ratio));
-            editorEl.style.zoom = currentZoom;
-          }
-          lastDist = dist;
-        }
-      }, {passive: false});
-
-      editorBody.addEventListener('touchend', function(e) {
-        if (e.touches.length < 2) {
-          isPinching = false;
-          lastDist = 0;
-        }
-      }, {passive: true});
-    })();
-
-    /* ── Intercept pasted/dropped images → compress before insert ── */
-    /* Use capture:true + stopImmediatePropagation to prevent Quill's own
-       clipboard/uploader from ALSO inserting the image (causing duplicates) */
-    quill.root.addEventListener('paste', function(e) {
-      var cd = e.clipboardData;
-      if (!cd || !cd.items) return;
-      for (var i = 0; i < cd.items.length; i++) {
-        if (cd.items[i].type.indexOf('image') === 0) {
-          e.preventDefault();
-          e.stopImmediatePropagation();
-          var file = cd.items[i].getAsFile();
-          if (!file) return;
-          (async function() {
-            var range = quill.getSelection(true);
-            try {
-              var dataUrl = await compressImage(file);
-              quill.insertEmbed(range.index, 'image', dataUrl, 'user');
-              quill.setSelection(range.index + 1, 0, 'silent');
-              /* Force immediate save */
-              if(saveTimer) clearTimeout(saveTimer);
-              saveCurrentNote();
-            } catch(err) {
-              quill.insertText(range.index, '[Image failed: '+err.message+']', {color:'#DC2626'}, 'user');
-            }
-          })();
-          return;
-        }
-      }
-    }, true);
-
-    quill.root.addEventListener('drop', function(e) {
-      if (!e.dataTransfer || !e.dataTransfer.files || !e.dataTransfer.files.length) return;
-      var file = e.dataTransfer.files[0];
-      if (!file || file.type.indexOf('image') !== 0) return;
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      (async function() {
-        var range = quill.getSelection(true) || {index: quill.getLength()};
-        try {
-          var dataUrl = await compressImage(file);
-          quill.insertEmbed(range.index, 'image', dataUrl, 'user');
-          quill.setSelection(range.index + 1, 0, 'silent');
-          /* Force immediate save */
-          if(saveTimer) clearTimeout(saveTimer);
-          saveCurrentNote();
-        } catch(err) {
-          quill.insertText(range.index, '[Image failed: '+err.message+']', {color:'#DC2626'}, 'user');
-        }
-      })();
-    });
-
-    /* ═══ IMAGE RESIZE ═════════════════════════════════ */
-    (function() {
-      var qlContainer = document.querySelector('.ql-container');
-      var wrap = null;     /* the overlay element */
-      var activeImg = null; /* currently selected img */
-      var startX, startY, startW, startH, ratio, handleType;
-      var dragging = false;
-
-      function createWrap() {
-        wrap = document.createElement('div');
-        wrap.className = 'img-resize-wrap';
-        ['nw','ne','sw','se'].forEach(function(pos) {
-          var h = document.createElement('div');
-          h.className = 'img-handle h-' + pos;
-          h.dataset.handle = pos;
-          h.addEventListener('mousedown', onHandleDown);
-          h.addEventListener('touchstart', onHandleDown, { passive: false });
-          wrap.appendChild(h);
-        });
-        var info = document.createElement('div');
-        info.className = 'img-resize-info';
-        wrap.appendChild(info);
-        qlContainer.appendChild(wrap);
-      }
-
-      function selectImage(img) {
-        if (activeImg === img && wrap) return;
-        deselectImage();
-        activeImg = img;
-        if (!wrap) createWrap();
-        positionWrap();
-        wrap.style.display = 'block';
-      }
-
-      function deselectImage() {
-        activeImg = null;
-        if (wrap) wrap.style.display = 'none';
-      }
-
-      function positionWrap() {
-        if (!activeImg || !wrap) return;
-        var contRect = qlContainer.getBoundingClientRect();
-        var imgRect = activeImg.getBoundingClientRect();
-        wrap.style.left = (imgRect.left - contRect.left + qlContainer.scrollLeft) + 'px';
-        wrap.style.top = (imgRect.top - contRect.top + qlContainer.scrollTop) + 'px';
-        wrap.style.width = imgRect.width + 'px';
-        wrap.style.height = imgRect.height + 'px';
-        var infoEl = wrap.querySelector('.img-resize-info');
-        if (infoEl) infoEl.textContent = Math.round(imgRect.width) + ' × ' + Math.round(imgRect.height);
-      }
-
-      function getEventXY(e) {
-        if (e.touches && e.touches.length > 0) return { x: e.touches[0].clientX, y: e.touches[0].clientY };
-        return { x: e.clientX, y: e.clientY };
-      }
-
-      function onHandleDown(e) {
-        if (!activeImg) return;
-        e.preventDefault();
-        e.stopPropagation();
-        dragging = true;
-        handleType = e.currentTarget.dataset.handle;
-        var pos = getEventXY(e);
-        startX = pos.x;
-        startY = pos.y;
-        startW = activeImg.getBoundingClientRect().width;
-        startH = activeImg.getBoundingClientRect().height;
-        ratio = startH / startW;
-        document.addEventListener('mousemove', onHandleMove);
-        document.addEventListener('mouseup', onHandleUp);
-        document.addEventListener('touchmove', onHandleMove, { passive: false });
-        document.addEventListener('touchend', onHandleUp);
-      }
-
-      function onHandleMove(e) {
-        if (!dragging || !activeImg) return;
-        e.preventDefault();
-        var pos = getEventXY(e);
-        var dx = pos.x - startX;
-        var dy = pos.y - startY;
-        var newW = startW;
-
-        if (handleType === 'se') newW = startW + dx;
-        else if (handleType === 'sw') newW = startW - dx;
-        else if (handleType === 'ne') newW = startW + dx;
-        else if (handleType === 'nw') newW = startW - dx;
-
-        newW = Math.max(40, Math.min(newW, qlContainer.clientWidth - 40));
-        activeImg.style.width = Math.round(newW) + 'px';
-        activeImg.style.height = 'auto';
-        activeImg.removeAttribute('width');
-        activeImg.removeAttribute('height');
-        positionWrap();
-      }
-
-      function onHandleUp(e) {
-        dragging = false;
-        document.removeEventListener('mousemove', onHandleMove);
-        document.removeEventListener('mouseup', onHandleUp);
-        document.removeEventListener('touchmove', onHandleMove);
-        document.removeEventListener('touchend', onHandleUp);
-        if (activeImg) {
-          positionWrap();
-          scheduleSave();
-        }
-      }
-
-      /* Click on image to select */
-      quill.root.addEventListener('click', function(e) {
-        if (e.target.tagName === 'IMG') {
-          e.preventDefault();
-          selectImage(e.target);
-        } else {
-          if (!dragging) deselectImage();
-        }
-      });
-
-      /* Deselect when clicking toolbar or outside */
-      document.querySelector('.ql-toolbar').addEventListener('mousedown', function() {
-        if (!dragging) deselectImage();
-      });
-
-      /* Reposition on scroll */
-      qlContainer.addEventListener('scroll', function() {
-        if (activeImg && wrap && wrap.style.display !== 'none') positionWrap();
-      });
-
-      /* Deselect on text change if image removed */
-      quill.on('text-change', function() {
-        if (activeImg && !quill.root.contains(activeImg)) deselectImage();
-        else if (activeImg && wrap && wrap.style.display !== 'none') {
-          requestAnimationFrame(positionWrap);
-        }
-      });
-    })();
-
-    /* ═══ NEW NOTE DIALOG ══════════════════════════════ */
-    (function() {
-      var nnOverlay = $('#newnote-overlay');
-      var nnTitleInput = $('#newnote-title');
-      var nnSections = $('#newnote-sections');
-      var nnSecLabel = $('#newnote-sec-label');
-      var nnAddBtn = $('#newnote-add-sec');
-      var nnCreateBtn = $('#newnote-create');
-      var nnCancelBtn = $('#newnote-cancel');
-      var nnSubs = $('#newnote-subtitle');
-      var nnSecs = []; /* working copy of section names */
-
-      function openNewNoteDialog() {
-        var specs = S.specialties[S.currentCatId] || [];
-        var specObj = specs.find(function(sp) { return sp.id === S.currentSpecId; });
-        var catObj = S.categories.find(function(c) { return c.id === S.currentCatId; });
-        /* Specialty template overrides category template */
-        var specTpl = (specObj && Array.isArray(specObj.template) && specObj.template.length > 0) ? specObj.template : null;
-        var catTpl = (catObj && Array.isArray(catObj.template) && catObj.template.length > 0) ? catObj.template : null;
-        var template = specTpl || catTpl || [];
-        nnSecs = template.slice();
-
-        nnTitleInput.value = '';
-
-        if (template.length > 0) {
-          nnSubs.textContent = 'Customize sections for this note, then tap Create.';
-          nnSecLabel.style.display = '';
-          nnAddBtn.style.display = '';
-        } else {
-          nnSubs.textContent = 'Enter a title and tap Create. You can add sections below if needed.';
-          nnSecLabel.style.display = '';
-          nnAddBtn.style.display = '';
-        }
-
-        renderNNRows();
-        nnOverlay.classList.add('active');
-        setTimeout(function() { nnTitleInput.focus(); }, 80);
-      }
-      /* expose to global createNote */
-      window.openNewNoteDialog = openNewNoteDialog;
-
-      function renderNNRows() {
-        nnSections.innerHTML = '';
-        if (nnSecs.length === 0) {
-          nnSections.innerHTML = '<div class="newnote-nosec">No sections. The note will start blank.</div>';
-          return;
-        }
-        nnSecs.forEach(function(name, i) {
-          var row = document.createElement('div');
-          row.className = 'tpl-row';
-          var isFirst = i === 0;
-          var isLast = i === nnSecs.length - 1;
-          row.innerHTML =
-            '<span class="tpl-num">' + (i + 1) + '</span>' +
-            '<input type="text" value="' + esc(name) + '" placeholder="Section name">' +
-            '<span class="tpl-btns">' +
-              '<button class="tpl-btn" data-a="up" title="Move up"' + (isFirst ? ' disabled' : '') + '><i class="fas fa-chevron-up"></i></button>' +
-              '<button class="tpl-btn" data-a="down" title="Move down"' + (isLast ? ' disabled' : '') + '><i class="fas fa-chevron-down"></i></button>' +
-              '<button class="tpl-btn danger" data-a="rm" title="Remove"><i class="fas fa-xmark"></i></button>' +
-            '</span>';
-
-          var inp = row.querySelector('input');
-          inp.addEventListener('input', function() { nnSecs[i] = inp.value; });
-
-          row.querySelector('[data-a="up"]').addEventListener('click', function() {
-            if (i > 0) { var tmp = nnSecs[i - 1]; nnSecs[i - 1] = nnSecs[i]; nnSecs[i] = tmp; renderNNRows(); }
-          });
-          row.querySelector('[data-a="down"]').addEventListener('click', function() {
-            if (i < nnSecs.length - 1) { var tmp = nnSecs[i]; nnSecs[i] = nnSecs[i + 1]; nnSecs[i + 1] = tmp; renderNNRows(); }
-          });
-          row.querySelector('[data-a="rm"]').addEventListener('click', function() {
-            nnSecs.splice(i, 1); renderNNRows();
-          });
-
-          nnSections.appendChild(row);
-        });
-      }
-
-      nnAddBtn.addEventListener('click', function() {
-        nnSecs.push('New Section');
-        renderNNRows();
-        var inputs = nnSections.querySelectorAll('input');
-        var last = inputs[inputs.length - 1];
-        if (last) { last.focus(); last.select(); }
-      });
-
-      nnCancelBtn.addEventListener('click', function() { nnOverlay.classList.remove('active'); });
-      nnOverlay.addEventListener('click', function(e) { if (e.target === nnOverlay) nnOverlay.classList.remove('active'); });
-
-      nnCreateBtn.addEventListener('click', function() {
-        var title = nnTitleInput.value.trim() || 'Untitled Note';
-        var cleanSecs = nnSecs.map(function(s) { return s.trim(); }).filter(function(s) { return s; });
-        var content = '';
-        if (cleanSecs.length > 0) {
-          content = cleanSecs.map(function(sec) { return '<h2>' + esc(sec) + '</h2><p><br></p><p><br></p><p><br></p>'; }).join('');
-        }
-        var id = store.add('notes', {
-          title: title,
-          content: content,
-          specialtyId: S.currentSpecId,
-          categoryId: S.currentCatId,
-          order: (S.notes[S.currentSpecId] || []).length,
-          updatedAt: new Date()
-        });
-        nnOverlay.classList.remove('active');
-        if (typeof id === 'string') openNote(id);
-        else if (id && typeof id.then === 'function') id.then(function(rid) { openNote(rid); });
-      });
-
-      /* Enter on title input triggers create */
-      nnTitleInput.addEventListener('keydown', function(e) {
-        if (e.key === 'Enter') nnCreateBtn.click();
-      });
-    })();
-
-    /* ═══ MOVE NOTE ════════════════════════════════════ */
-    let moveNoteId = null;
-    const moveOverlay = $('#move-overlay');
-    const moveCatSel = $('#move-cat-select');
-    const moveSpecSel = $('#move-spec-select');
-    const moveSpecEmpty = $('#move-spec-empty');
-    const moveConfirmBtn = $('#move-confirm');
-
-    function openMoveDialog(noteId, noteTitle) {
-      moveNoteId = noteId;
-      /* find note's current location */
-      let noteCatId = S.currentCatId;
-      let noteSpecId = S.currentSpecId;
-      /* also search through data in case called from editor */
-      for (const catId of Object.keys(S.specialties)) {
-        for (const sp of S.specialties[catId]) {
-          if ((S.notes[sp.id]||[]).find(n=>n.id===noteId)) {
-            noteCatId = catId; noteSpecId = sp.id; break;
-          }
-        }
-      }
-
-      const curCat = S.categories.find(c=>c.id===noteCatId);
-      let curSpec = null;
-      (S.specialties[noteCatId]||[]).forEach(sp=>{ if(sp.id===noteSpecId) curSpec=sp; });
-
-      /* subtitle */
-      $('#move-subtitle').textContent = 'Move "' + (noteTitle||'Untitled Note') + '" to a new location.';
-      /* current badge */
-      const curBadge = $('#move-current');
-      curBadge.innerHTML = '<i class="fas fa-location-dot"></i> Currently in: ' + esc((curCat?curCat.name:'')+ ' › '+(curSpec?curSpec.name:''));
-
-      /* populate category dropdown */
-      moveCatSel.innerHTML = '';
-      S.categories.forEach(cat => {
-        const opt = document.createElement('option');
-        opt.value = cat.id; opt.textContent = cat.name;
-        if (cat.id === noteCatId) opt.selected = true;
-        moveCatSel.appendChild(opt);
-      });
-
-      /* populate specialty dropdown for selected category */
-      populateMoveSpecs(moveCatSel.value, noteSpecId);
-      updateMoveConfirmState(noteCatId, noteSpecId);
-
-      moveOverlay.classList.add('active');
-    }
-
-    function populateMoveSpecs(catId, preselectSpecId) {
-      const cat = S.categories.find(c=>c.id===catId);
-      const sub = getSublabel(cat);
-      $('#move-spec-label').textContent = sub;
-
-      const specs = S.specialties[catId] || [];
-      moveSpecSel.innerHTML = '';
-      moveSpecEmpty.style.display = 'none';
-      moveSpecSel.style.display = 'block';
-
-      if (specs.length === 0) {
-        moveSpecSel.style.display = 'none';
-        moveSpecEmpty.style.display = 'block';
-        moveSpecEmpty.textContent = 'No ' + pluralize(sub, 0).toLowerCase() + ' in this category. Create one first.';
-        moveConfirmBtn.disabled = true;
-        return;
-      }
-
-      specs.forEach(sp => {
-        const opt = document.createElement('option');
-        opt.value = sp.id; opt.textContent = sp.name;
-        if (sp.id === preselectSpecId) opt.selected = true;
-        moveSpecSel.appendChild(opt);
-      });
-    }
-
-    function updateMoveConfirmState(origCatId, origSpecId) {
-      const selCat = moveCatSel.value;
-      const selSpec = moveSpecSel.value;
-      const specs = S.specialties[selCat] || [];
-      /* disable if no specs, or if same location */
-      if (specs.length === 0) { moveConfirmBtn.disabled = true; return; }
-      moveConfirmBtn.disabled = (selCat === origCatId && selSpec === origSpecId);
-    }
-
-    moveCatSel.addEventListener('change', () => {
-      populateMoveSpecs(moveCatSel.value, null);
-      /* find original location of the note being moved */
-      let origCatId = null, origSpecId = null;
-      for (const catId of Object.keys(S.specialties)) {
-        for (const sp of S.specialties[catId]) {
-          if ((S.notes[sp.id]||[]).find(n=>n.id===moveNoteId)) {
-            origCatId = catId; origSpecId = sp.id; break;
-          }
-        }
-        if (origCatId) break;
-      }
-      updateMoveConfirmState(origCatId, origSpecId);
-    });
-
-    moveSpecSel.addEventListener('change', () => {
-      let origCatId = null, origSpecId = null;
-      for (const catId of Object.keys(S.specialties)) {
-        for (const sp of S.specialties[catId]) {
-          if ((S.notes[sp.id]||[]).find(n=>n.id===moveNoteId)) {
-            origCatId = catId; origSpecId = sp.id; break;
-          }
-        }
-        if (origCatId) break;
-      }
-      updateMoveConfirmState(origCatId, origSpecId);
-    });
-
-    $('#move-cancel').addEventListener('click', () => { moveOverlay.classList.remove('active'); moveNoteId = null; });
-    moveOverlay.addEventListener('click', e => { if (e.target === moveOverlay) { moveOverlay.classList.remove('active'); moveNoteId = null; } });
-
-    $('#move-confirm').addEventListener('click', async () => {
-      if (!moveNoteId) return;
-      const destCatId = moveCatSel.value;
-      const destSpecId = moveSpecSel.value;
-      if (!destCatId || !destSpecId) return;
-
-      const destSpecs = S.specialties[destCatId] || [];
-      const destNotes = S.notes[destSpecId] || [];
-
-      try {
-        await store.update('notes', moveNoteId, {
-          categoryId: destCatId,
-          specialtyId: destSpecId,
-          order: destNotes.length
-        });
-
-        /* if currently viewing the editor for this note, update context */
-        if (S.currentNoteId === moveNoteId) {
-          S.currentCatId = destCatId;
-          S.currentSpecId = destSpecId;
-          /* refresh editor crumb */
-          const cat = S.categories.find(c=>c.id===destCatId);
-          const specObj = destSpecs.find(sp=>sp.id===destSpecId);
-          $('#editor-crumb').innerHTML = (cat?esc(cat.name):'') + ' <span style="color:var(--c-text-muted);font-size:12px;font-family:var(--font-main)"> &rsaquo; ' + (specObj?esc(specObj.name):'') + '</span>';
-        }
-      } catch(err) {
-        console.log('Move error: ' + (err.message || err));
-      }
-
-      moveOverlay.classList.remove('active');
-      moveNoteId = null;
-    });
-
-    /* Editor move button */
-    $('#btn-editor-move').addEventListener('click', () => {
-      if (!S.currentNoteId) return;
-      let noteData = null;
-      for (const k of Object.keys(S.notes)) { const f = S.notes[k].find(n=>n.id===S.currentNoteId); if(f){noteData=f;break;} }
-      openMoveDialog(S.currentNoteId, noteData ? noteData.title : $('#note-title').value);
-    });
-
-    /* ═══ TEMPLATE EDITOR ══════════════════════════════ */
-    let tplSpecId = null;
-    let tplCatId = null; /* non-null when editing a category template */
-    let tplSections = [];
-    const tplOverlay = $('#tpl-overlay');
-
-    function openTemplateEditor(specId, catId) {
-      tplSpecId = specId || null;
-      tplCatId = catId || null;
-
-      if (tplCatId) {
-        /* Editing category-level template */
-        var catObj = S.categories.find(function(c){ return c.id === tplCatId; });
-        if (!catObj) return;
-        var sub = getSublabel(catObj);
-        $('#tpl-title').textContent = 'Default Template for "' + catObj.name + '"';
-        $('#tpl-subtitle').textContent = 'This template applies to all ' + pluralize(sub,0).toLowerCase() + ' unless they have their own template.';
-        tplSections = Array.isArray(catObj.template) ? catObj.template.slice() : [];
-      } else {
-        /* Editing specialty-level template */
-        var specObj = null;
-        for (var cid of Object.keys(S.specialties)) {
-          var found = (S.specialties[cid]||[]).find(function(sp){ return sp.id === specId; });
-          if (found) { specObj = found; break; }
-        }
-        if (!specObj) return;
-        var cat = S.categories.find(function(c){ return c.id === S.currentCatId; });
-        var sub2 = getSublabel(cat);
-        var catTpl = (cat && Array.isArray(cat.template) && cat.template.length > 0);
-        $('#tpl-title').textContent = 'Template for "' + specObj.name + '"';
-        $('#tpl-subtitle').textContent = catTpl
-          ? 'Overrides the default category template. Clear all sections to fall back to the category template.'
-          : 'Define sections for new notes in this ' + sub2.toLowerCase() + '. Each section becomes a header.';
-        tplSections = Array.isArray(specObj.template) ? specObj.template.slice() : [];
-      }
-
-      renderTplRows();
-      tplOverlay.classList.add('active');
-    }
-
-    function renderTplRows() {
-      var el = $('#tpl-sections');
-      el.innerHTML = '';
-
-      if (tplSections.length === 0) {
-        el.innerHTML = '<div class="tpl-empty">No sections yet. Tap "Add Section" to start building your template.</div>';
-        return;
-      }
-
-      tplSections.forEach(function(name, i) {
-        var row = document.createElement('div');
-        row.className = 'tpl-row';
-        var isFirst = i === 0;
-        var isLast = i === tplSections.length - 1;
-        row.innerHTML =
-          '<span class="tpl-num">' + (i + 1) + '</span>' +
-          '<input type="text" value="' + esc(name) + '" placeholder="Section name">' +
-          '<span class="tpl-btns">' +
-            '<button class="tpl-btn" data-a="up" title="Move up"' + (isFirst ? ' disabled' : '') + '><i class="fas fa-chevron-up"></i></button>' +
-            '<button class="tpl-btn" data-a="down" title="Move down"' + (isLast ? ' disabled' : '') + '><i class="fas fa-chevron-down"></i></button>' +
-            '<button class="tpl-btn danger" data-a="rm" title="Remove"><i class="fas fa-xmark"></i></button>' +
-          '</span>';
-
-        var inp = row.querySelector('input');
-        inp.addEventListener('input', function() { tplSections[i] = inp.value; });
-
-        row.querySelector('[data-a="up"]').addEventListener('click', function() {
-          if (i > 0) {
-            var tmp = tplSections[i - 1];
-            tplSections[i - 1] = tplSections[i];
-            tplSections[i] = tmp;
-            renderTplRows();
-          }
-        });
-        row.querySelector('[data-a="down"]').addEventListener('click', function() {
-          if (i < tplSections.length - 1) {
-            var tmp = tplSections[i];
-            tplSections[i] = tplSections[i + 1];
-            tplSections[i + 1] = tmp;
-            renderTplRows();
-          }
-        });
-        row.querySelector('[data-a="rm"]').addEventListener('click', function() {
-          tplSections.splice(i, 1);
-          renderTplRows();
-        });
-
-        el.appendChild(row);
-      });
-    }
-
-    $('#tpl-add-btn').addEventListener('click', function() {
-      tplSections.push('New Section');
-      renderTplRows();
-      var inputs = $('#tpl-sections').querySelectorAll('input');
-      var last = inputs[inputs.length - 1];
-      if (last) { last.focus(); last.select(); }
-    });
-
-    $('#tpl-cancel').addEventListener('click', function() { tplOverlay.classList.remove('active'); tplSpecId = null; tplCatId = null; });
-    tplOverlay.addEventListener('click', function(e) { if (e.target === tplOverlay) { tplOverlay.classList.remove('active'); tplSpecId = null; tplCatId = null; } });
-
-    $('#tpl-save').addEventListener('click', async function() {
-      if (!tplSpecId && !tplCatId) return;
-      var cleanSections = tplSections.map(function(s){ return s.trim(); }).filter(function(s){ return s; });
-      try {
-        if (tplCatId) {
-          await store.update('categories', tplCatId, { template: cleanSections });
-        } else {
-          await store.update('specialties', tplSpecId, { template: cleanSections });
-        }
-      } catch(err) {
-        console.log('Template save error: ' + (err.message || err));
-      }
-      tplOverlay.classList.remove('active');
-      tplSpecId = null;
-      tplCatId = null;
-    });
-  </script>
-    <script>
-  /* ── PWA: Manifest for Add to Home Screen ── */
-  (function(){
-    var iconPath='apple-touch-icon.png';
-    var manifest={
-      name:"Jeff Dietetics",
-      short_name:"Dietetics",
-      start_url:".",
-      display:"standalone",
-      orientation:"portrait",
-      background_color:"#0A3A28",
-      theme_color:"#124B34",
-      icons:[
-        {src:iconPath,sizes:"512x512",type:"image/png",purpose:"any maskable"}
-      ]
-    };
-    var mb=new Blob([JSON.stringify(manifest)],{type:'application/json'});
-    var ml=document.createElement('link');
-    ml.rel='manifest'; ml.href=URL.createObjectURL(mb);
-    document.head.appendChild(ml);
-  })();
-  </script>
-</body>
-</html>
+...
