@@ -2195,152 +2195,157 @@
         setTimeout(function() { makeTableCellsEditable(); }, 50);
       }
 
-      /* Make all table cells contenteditable (non-destructive: skip if already set) */
+      /* Make table cells editable — only called after table insert or paste, NOT on every keystroke */
       function makeTableCellsEditable() {
-        var editor = quill.root;
-        editor.querySelectorAll('table td:not([contenteditable]), table th:not([contenteditable])').forEach(function(cell) {
+        quill.root.querySelectorAll('table td:not([contenteditable]), table th:not([contenteditable])').forEach(function(cell) {
           cell.setAttribute('contenteditable', 'true');
         });
       }
 
-      /* Only run when new tables/cells appear via MutationObserver instead of
-         every text-change (which was causing cursor to jump on every keystroke) */
-      var tblObserver = new MutationObserver(function(mutations) {
-        var needsCheck = false;
-        for (var i = 0; i < mutations.length; i++) {
-          if (mutations[i].addedNodes.length > 0) { needsCheck = true; break; }
-        }
-        if (needsCheck) setTimeout(makeTableCellsEditable, 30);
+      /* Also run after paste in case pasted content contains tables (e.g. from OneNote) */
+      quill.root.addEventListener('paste', function() {
+        setTimeout(makeTableCellsEditable, 150);
       });
-      tblObserver.observe(quill.root, { childList: true, subtree: true });
 
-      /* ── Shared table helper functions ── */
       var ctxTargetCell = null;
 
-      function createEmptyRow(colCount, isHeader) {
-        var tr = document.createElement('tr');
-        for (var i = 0; i < colCount; i++) {
-          var cell = document.createElement(isHeader ? 'th' : 'td');
-          cell.innerHTML = '<br>';
-          cell.setAttribute('contenteditable', 'true');
-          tr.appendChild(cell);
-        }
-        return tr;
-      }
+      /* ── Data-driven table rebuild ──
+         Instead of modifying individual cells (which Quill's internal
+         MutationObserver mangles), we:
+         1. Extract the table as a 2D data array
+         2. Modify the array
+         3. Rebuild the full table HTML
+         4. Swap old table → new table in ONE DOM operation */
 
-      function addColumn(table, atIndex) {
-        if (atIndex < 0) atIndex = 0;
-        table.querySelectorAll('tr').forEach(function(r) {
-          var isHead = r.parentNode.tagName === 'THEAD';
-          var cell = document.createElement(isHead ? 'th' : 'td');
-          cell.innerHTML = '<br>';
-          cell.setAttribute('contenteditable', 'true');
-          if (atIndex >= r.children.length) {
-            r.appendChild(cell);
-          } else {
-            r.insertBefore(cell, r.children[atIndex]);
-          }
+      function extractTableData(table) {
+        var hasHeader = table.querySelector('thead') !== null;
+        var rows = Array.from(table.querySelectorAll('tr'));
+        var data = rows.map(function(r) {
+          return Array.from(r.children).map(function(c) {
+            return c.innerHTML;
+          });
         });
+        return { data: data, hasHeader: hasHeader };
       }
 
-      function toggleHeaderRow(table) {
-        var thead = table.querySelector('thead');
-        var tbody = table.querySelector('tbody');
-        if (thead && thead.rows.length > 0) {
-          if (!tbody) { tbody = document.createElement('tbody'); table.appendChild(tbody); }
-          var hrow = thead.rows[0];
-          var newRow = document.createElement('tr');
-          Array.from(hrow.children).forEach(function(th) {
-            var td = document.createElement('td');
-            td.innerHTML = th.innerHTML;
-            td.setAttribute('contenteditable', 'true');
-            newRow.appendChild(td);
-          });
-          tbody.insertBefore(newRow, tbody.firstChild);
-          thead.remove();
-        } else {
-          if (!tbody || !tbody.rows.length) return;
-          var firstRow = tbody.rows[0];
-          thead = document.createElement('thead');
-          var htr = document.createElement('tr');
-          Array.from(firstRow.children).forEach(function(td) {
-            var th = document.createElement('th');
-            th.innerHTML = td.innerHTML;
-            th.setAttribute('contenteditable', 'true');
-            htr.appendChild(th);
-          });
-          thead.appendChild(htr);
-          table.insertBefore(thead, tbody);
-          firstRow.remove();
+      function buildTableHTML(data, hasHeader) {
+        var html = '<table>';
+        for (var i = 0; i < data.length; i++) {
+          if (hasHeader && i === 0) html += '<thead>';
+          if (hasHeader && i === 1) html += '<tbody>';
+          if (!hasHeader && i === 0) html += '<tbody>';
+          html += '<tr>';
+          for (var j = 0; j < data[i].length; j++) {
+            var tag = (hasHeader && i === 0) ? 'th' : 'td';
+            html += '<' + tag + ' contenteditable="true">' + data[i][j] + '</' + tag + '>';
+          }
+          html += '</tr>';
+          if (hasHeader && i === 0) html += '</thead>';
         }
+        html += '</tbody></table>';
+        return html;
       }
 
-      /* Execute a table action on ctxTargetCell */
+      function replaceTable(oldTable, newHTML) {
+        var wrap = document.createElement('div');
+        wrap.innerHTML = newHTML;
+        var newTable = wrap.firstChild;
+        oldTable.replaceWith(newTable);
+        return newTable;
+      }
+
       function execTableAction(action) {
         if (!ctxTargetCell) return;
         var table = ctxTargetCell.closest('table');
         var row = ctxTargetCell.closest('tr');
         if (!table || !row) return;
-        var cellIndex = Array.from(row.children).indexOf(ctxTargetCell);
-        var colCount = row.children.length;
 
+        var allRows = Array.from(table.querySelectorAll('tr'));
+        var rowIndex = allRows.indexOf(row);
+        var cellIndex = Array.from(row.children).indexOf(ctxTargetCell);
+        if (cellIndex < 0) cellIndex = 0;
+
+        /* Delete table — simple case */
+        if (action === 'deleteTable') {
+          table.remove();
+          scheduleSave();
+          hideFloatBar();
+          return;
+        }
+
+        /* Extract table data */
+        var info = extractTableData(table);
+        var data = info.data;
+        var hasHeader = info.hasHeader;
+        var colCount = data[0] ? data[0].length : 0;
+
+        /* Modify the data array */
         switch (action) {
           case 'addRowAbove':
-            var newRow = createEmptyRow(colCount, false);
-            if (row.parentNode.tagName === 'THEAD') {
-              var tbody = table.querySelector('tbody');
-              if (!tbody) { tbody = document.createElement('tbody'); table.appendChild(tbody); }
-              tbody.insertBefore(newRow, tbody.firstChild);
+            var emptyRow = [];
+            for (var a = 0; a < colCount; a++) emptyRow.push('<br>');
+            if (hasHeader && rowIndex === 0) {
+              data.splice(1, 0, emptyRow);
             } else {
-              row.parentNode.insertBefore(newRow, row);
+              data.splice(rowIndex, 0, emptyRow);
+              if (hasHeader && rowIndex <= 0) rowIndex++;
             }
             break;
           case 'addRowBelow':
-            var newRowB = createEmptyRow(colCount, false);
-            if (row.parentNode.tagName === 'THEAD') {
-              var tbodyB = table.querySelector('tbody');
-              if (!tbodyB) { tbodyB = document.createElement('tbody'); table.appendChild(tbodyB); }
-              tbodyB.insertBefore(newRowB, tbodyB.firstChild);
-            } else {
-              row.parentNode.insertBefore(newRowB, row.nextSibling);
-            }
+            var emptyRowB = [];
+            for (var b = 0; b < colCount; b++) emptyRowB.push('<br>');
+            data.splice(rowIndex + 1, 0, emptyRowB);
             break;
           case 'addColLeft':
-            addColumn(table, cellIndex);
+            for (var cl = 0; cl < data.length; cl++) {
+              data[cl].splice(cellIndex, 0, '<br>');
+            }
             break;
           case 'addColRight':
-            addColumn(table, cellIndex + 1);
+            for (var cr = 0; cr < data.length; cr++) {
+              data[cr].splice(cellIndex + 1, 0, '<br>');
+            }
             break;
           case 'deleteRow':
-            if (table.querySelectorAll('tr').length > 1) {
-              row.remove();
+            if (data.length > 1) {
+              data.splice(rowIndex, 1);
+              if (hasHeader && rowIndex === 0) hasHeader = false;
             } else {
-              table.remove();
+              table.remove(); scheduleSave(); hideFloatBar(); return;
             }
             break;
           case 'deleteCol':
             if (colCount > 1) {
-              table.querySelectorAll('tr').forEach(function(r) {
-                if (r.children[cellIndex]) r.children[cellIndex].remove();
-              });
+              for (var dc = 0; dc < data.length; dc++) {
+                data[dc].splice(cellIndex, 1);
+              }
             } else {
-              table.remove();
+              table.remove(); scheduleSave(); hideFloatBar(); return;
             }
             break;
-          case 'deleteTable':
-            table.remove();
-            break;
           case 'toggleHeader':
-            toggleHeaderRow(table);
+            hasHeader = !hasHeader;
             break;
         }
-        makeTableCellsEditable();
+
+        /* Rebuild & swap in one DOM operation */
+        var newHTML = buildTableHTML(data, hasHeader);
+        var newTable = replaceTable(table, newHTML);
+
         scheduleSave();
-        /* Re-position floating bar if table still exists */
-        if (action === 'deleteTable') {
-          hideFloatBar();
-        } else if (ctxTargetCell.closest('table')) {
-          setTimeout(function() { positionFloatBar(ctxTargetCell); }, 30);
+
+        /* Re-select a cell in the rebuilt table and re-show floating bar */
+        var newRows = newTable.querySelectorAll('tr');
+        var safeRow = Math.min(rowIndex, newRows.length - 1);
+        if (safeRow < 0) safeRow = 0;
+        var targetRow = newRows[safeRow];
+        var safeCel = Math.min(cellIndex, targetRow.children.length - 1);
+        if (safeCel < 0) safeCel = 0;
+        ctxTargetCell = targetRow.children[safeCel];
+        if (ctxTargetCell) {
+          quill.root.querySelectorAll('.tbl-active-cell').forEach(function(c) { c.classList.remove('tbl-active-cell'); });
+          ctxTargetCell.classList.add('tbl-active-cell');
+          setTimeout(function() { positionFloatBar(ctxTargetCell); }, 20);
         } else {
           hideFloatBar();
         }
