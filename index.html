@@ -364,7 +364,7 @@
     .save-status.saved { color:var(--c-primary); }
     .save-status.error { color:var(--c-danger); }
     .editor-body { flex:1; display:flex; flex-direction:column; overflow:hidden; background:var(--c-surface); min-height:0; }
-    .editor-scroll { flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch; min-height:0; }
+    .editor-scroll { flex:1; display:flex; flex-direction:column; overflow-y:auto; -webkit-overflow-scrolling:touch; min-height:0; }
     .note-title-wrap { padding:20px 20px 0; flex-shrink:0; }
     #note-title { width:100%; border:none; outline:none; font-family:var(--font-main); font-size:24px; font-weight:800; color:var(--c-text); background:transparent; padding:0; }
     #note-title::placeholder { color:var(--c-text-muted); }
@@ -744,14 +744,22 @@
   <script src="https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.js"></script>
   <script>
     /* ── Global error handler: show crash info instead of white screen ── */
+    function showCrashScreen(title, detail) {
+      document.body.style.cssText = 'background:#FFE0E0;color:#000;padding:24px;font-family:monospace;margin:0;';
+      document.body.innerHTML = '<div style="background:#D32F2F;color:#fff;padding:16px 20px;border-radius:8px;margin-bottom:16px;font-size:18px;font-weight:bold;">' +
+        '⚠ App Crashed</div><div style="background:#fff;padding:16px;border-radius:8px;border:2px solid #D32F2F;">' +
+        '<h3 style="margin:0 0 8px;color:#D32F2F;">' + title + '</h3>' +
+        '<pre style="white-space:pre-wrap;word-break:break-all;margin:0;font-size:13px;">' + detail + '</pre></div>' +
+        '<p style="margin-top:16px;font-size:13px;color:#666;">Please screenshot this and send to developer.</p>';
+    }
     window.onerror = function(msg, url, line, col, err) {
-      document.body.style.background = '#fff';
-      document.body.style.color = '#000';
-      document.body.style.padding = '24px';
-      document.body.style.fontFamily = 'monospace';
-      document.body.innerHTML = '<h2 style="color:red">App Error</h2><pre>' +
-        msg + '\nLine: ' + line + ', Col: ' + col +
-        (err && err.stack ? '\n\n' + err.stack : '') + '</pre>';
+      showCrashScreen('JavaScript Error', msg + '\nLine: ' + line + ', Col: ' + col +
+        (err && err.stack ? '\n\n' + err.stack : ''));
+    };
+    window.onunhandledrejection = function(event) {
+      var reason = event.reason;
+      var detail = reason ? (reason.stack || reason.message || String(reason)) : 'Unknown promise rejection';
+      showCrashScreen('Unhandled Promise Error', detail);
     };
 
     /* ── Always light mode (no dark mode) ────────── */
@@ -1983,7 +1991,6 @@
     const $=s=>document.querySelector(s);
     const quill = new Quill('#quill-editor',{
       theme:'snow', placeholder:'Start writing your notes\u2026',
-      scrollingContainer:'.editor-scroll',
       modules:{
         history:{ delay:1000, maxStack:500, userOnly:true },
         toolbar:{
@@ -2002,14 +2009,14 @@
     });
 
     /* ── Move toolbar outside scroll area so it stays fixed at top ── */
-    (function() {
+    try {
       var qlToolbar = document.querySelector('.ql-toolbar.ql-snow');
       var editorBody = document.querySelector('.editor-body');
       var editorScroll = document.querySelector('.editor-scroll');
       if (qlToolbar && editorBody && editorScroll) {
         editorBody.insertBefore(qlToolbar, editorScroll);
       }
-    })();
+    } catch(e) { console.log('Toolbar move failed: ' + e.message); }
 
     /* ── Keyboard shortcuts for undo/redo ── */
     var historyModule = quill.getModule('history');
@@ -3836,119 +3843,4 @@
           var newPos = insertAt + 1 + name.length;
           quill.insertText(newPos, '\n', 'user');
           quill.setSelection(newPos + 1, 0, 'user');
-          quill.focus();
-        }
-      });
-    });
-
-    /* ── Pinch-to-zoom on editor content only (CSS zoom) ── */
-    (function() {
-      var editorEl = document.querySelector('.ql-editor');
-      var scrollArea = document.querySelector('.editor-scroll');
-      if (!editorEl || !scrollArea) return;
-
-      var currentZoom = 1;
-      var MIN_ZOOM = 0.5;
-      var MAX_ZOOM = 3;
-      var lastDist = 0;
-      var isPinching = false;
-
-      scrollArea.addEventListener('touchstart', function(e) {
-        if (e.touches.length === 2) {
-          isPinching = true;
-          lastDist = Math.hypot(
-            e.touches[0].clientX - e.touches[1].clientX,
-            e.touches[0].clientY - e.touches[1].clientY
-          );
-        }
-      }, {passive: true});
-
-      scrollArea.addEventListener('touchmove', function(e) {
-        if (e.touches.length === 2 && isPinching) {
-          e.preventDefault();
-          var dist = Math.hypot(
-            e.touches[0].clientX - e.touches[1].clientX,
-            e.touches[0].clientY - e.touches[1].clientY
-          );
-          if (lastDist > 0) {
-            var ratio = dist / lastDist;
-            currentZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, currentZoom * ratio));
-            editorEl.style.zoom = currentZoom;
-          }
-          lastDist = dist;
-        }
-      }, {passive: false});
-
-      scrollArea.addEventListener('touchend', function(e) {
-        if (e.touches.length < 2) {
-          isPinching = false;
-          lastDist = 0;
-        }
-      }, {passive: true});
-    })();
-
-    /* ── Intercept pasted/dropped images → compress before insert ── */
-    /* Use capture:true + stopImmediatePropagation to prevent Quill's own
-       clipboard/uploader from ALSO inserting the image (causing duplicates) */
-    quill.root.addEventListener('paste', function(e) {
-      var cd = e.clipboardData;
-      if (!cd || !cd.items) return;
-      for (var i = 0; i < cd.items.length; i++) {
-        if (cd.items[i].type.indexOf('image') === 0) {
-          e.preventDefault();
-          e.stopImmediatePropagation();
-          var file = cd.items[i].getAsFile();
-          if (!file) return;
-          (async function() {
-            var range = quill.getSelection(true);
-            try {
-              var dataUrl = await compressImage(file);
-              quill.insertEmbed(range.index, 'image', dataUrl, 'user');
-              quill.setSelection(range.index + 1, 0, 'silent');
-              /* Force immediate save */
-              if(saveTimer) clearTimeout(saveTimer);
-              saveCurrentNote();
-            } catch(err) {
-              quill.insertText(range.index, '[Image failed: '+err.message+']', {color:'#DC2626'}, 'user');
-            }
-          })();
-          return;
-        }
-      }
-    }, true);
-
-    quill.root.addEventListener('drop', function(e) {
-      if (!e.dataTransfer || !e.dataTransfer.files || !e.dataTransfer.files.length) return;
-      var file = e.dataTransfer.files[0];
-      if (!file || file.type.indexOf('image') !== 0) return;
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      (async function() {
-        var range = quill.getSelection(true) || {index: quill.getLength()};
-        try {
-          var dataUrl = await compressImage(file);
-          quill.insertEmbed(range.index, 'image', dataUrl, 'user');
-          quill.setSelection(range.index + 1, 0, 'silent');
-          /* Force immediate save */
-          if(saveTimer) clearTimeout(saveTimer);
-          saveCurrentNote();
-        } catch(err) {
-          quill.insertText(range.index, '[Image failed: '+err.message+']', {color:'#DC2626'}, 'user');
-        }
-      })();
-    });
-
-    /* ═══ IMAGE RESIZE ═════════════════════════════════ */
-    (function() {
-      var qlContainer = document.querySelector('.ql-container');
-      var wrap = null;     /* the overlay element */
-      var activeImg = null; /* currently selected img */
-      var startX, startY, startW, startH, ratio, handleType;
-      var dragging = false;
-
-      function createWrap() {
-        wrap = document.createElement('div');
-        wrap.className = 'img-resize-wrap';
-        ['nw','ne','sw','se'].forEach(function(pos) {
-          var h = document.createElement('div');
-          h.className = 'img-handle h-' + p...
+      ...
