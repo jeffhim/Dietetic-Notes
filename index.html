@@ -363,8 +363,7 @@
     .save-status.saving { color:var(--c-accent); }
     .save-status.saved { color:var(--c-primary); }
     .save-status.error { color:var(--c-danger); }
-    .editor-body { flex:1; display:flex; flex-direction:column; overflow:hidden; background:var(--c-surface); min-height:0; }
-    .editor-scroll { flex:1; display:flex; flex-direction:column; overflow-y:auto; -webkit-overflow-scrolling:touch; min-height:0; }
+    .editor-body { flex:1; display:flex; flex-direction:column; overflow-y:auto; -webkit-overflow-scrolling:touch; background:var(--c-surface); min-height:0; }
     .note-title-wrap { padding:20px 20px 0; flex-shrink:0; }
     #note-title { width:100%; border:none; outline:none; font-family:var(--font-main); font-size:24px; font-weight:800; color:var(--c-text); background:transparent; padding:0; }
     #note-title::placeholder { color:var(--c-text-muted); }
@@ -373,7 +372,7 @@
     .btn-add-section:hover { background:rgba(45,212,191,0.16); }
     .btn-add-section i { font-size:11px; }
     .editor-quill { flex:1; display:flex; flex-direction:column; overflow:visible; position:relative; min-height:0; }
-    .ql-toolbar.ql-snow { border:none !important; border-top:1px solid var(--c-border) !important; border-bottom:1px solid var(--c-border) !important; background:var(--c-surface-2); padding:5px 16px !important; flex-shrink:0; z-index:10; }
+    .ql-toolbar.ql-snow { border:none !important; border-top:1px solid var(--c-border) !important; border-bottom:1px solid var(--c-border) !important; background:var(--c-surface-2); padding:5px 16px !important; flex-shrink:0; position:sticky; top:0; z-index:10; }
     .ql-container.ql-snow { border:none !important; flex:1; overflow-y:visible; font-family:var(--font-main); font-size:15px; position:relative; }
     .ql-editor { padding:16px 20px 60px !important; color:var(--c-text); line-height:1.75; min-height:300px; }
     .ql-editor.ql-blank::before { color:var(--c-text-muted) !important; font-style:normal !important; }
@@ -615,13 +614,10 @@
         <div class="save-status" id="save-status"></div>
       </div>
       <div class="editor-body">
-        <!-- .ql-toolbar will be moved here by JS after Quill init -->
-        <div class="editor-scroll">
-          <div class="note-title-wrap"><input type="text" id="note-title" placeholder="Untitled Note"></div>
-          <div class="note-meta" id="note-meta"></div>
-          <button class="btn-add-section" id="btn-add-section"><i class="fas fa-plus"></i> Add Section</button>
-          <div class="editor-quill"><div id="quill-editor"></div></div>
-        </div>
+        <div class="note-title-wrap"><input type="text" id="note-title" placeholder="Untitled Note"></div>
+        <div class="note-meta" id="note-meta"></div>
+        <button class="btn-add-section" id="btn-add-section"><i class="fas fa-plus"></i> Add Section</button>
+        <div class="editor-quill"><div id="quill-editor"></div></div>
       </div>
     </div>
 
@@ -2008,16 +2004,6 @@
       }}
     });
 
-    /* ── Move toolbar outside scroll area so it stays fixed at top ── */
-    try {
-      var qlToolbar = document.querySelector('.ql-toolbar.ql-snow');
-      var editorBody = document.querySelector('.editor-body');
-      var editorScroll = document.querySelector('.editor-scroll');
-      if (qlToolbar && editorBody && editorScroll) {
-        editorBody.insertBefore(qlToolbar, editorScroll);
-      }
-    } catch(e) { console.log('Toolbar move failed: ' + e.message); }
-
     /* ── Keyboard shortcuts for undo/redo ── */
     var historyModule = quill.getModule('history');
     quill.root.addEventListener('keydown', function(e) {
@@ -2494,9 +2480,9 @@
           hideFloatBar();
         }
       });
-      var editorScrollEl = document.querySelector('.editor-scroll');
-      if (editorScrollEl) {
-        editorScrollEl.addEventListener('scroll', function() {
+      var editorBody = document.querySelector('.editor-body');
+      if (editorBody) {
+        editorBody.addEventListener('scroll', function() {
           if (ctxTargetCell && ctxTargetCell.closest('table')) {
             positionFloatBar(ctxTargetCell);
           }
@@ -3843,4 +3829,654 @@
           var newPos = insertAt + 1 + name.length;
           quill.insertText(newPos, '\n', 'user');
           quill.setSelection(newPos + 1, 0, 'user');
-      ...
+          quill.focus();
+        }
+      });
+    });
+
+    /* ── Pinch-to-zoom on editor content only (CSS zoom) ── */
+    (function() {
+      var editorEl = document.querySelector('.ql-editor');
+      var editorBody = document.querySelector('.editor-body');
+      if (!editorEl || !editorBody) return;
+
+      var currentZoom = 1;
+      var MIN_ZOOM = 0.5;
+      var MAX_ZOOM = 3;
+      var lastDist = 0;
+      var isPinching = false;
+
+      editorBody.addEventListener('touchstart', function(e) {
+        if (e.touches.length === 2) {
+          isPinching = true;
+          lastDist = Math.hypot(
+            e.touches[0].clientX - e.touches[1].clientX,
+            e.touches[0].clientY - e.touches[1].clientY
+          );
+        }
+      }, {passive: true});
+
+      editorBody.addEventListener('touchmove', function(e) {
+        if (e.touches.length === 2 && isPinching) {
+          e.preventDefault();
+          var dist = Math.hypot(
+            e.touches[0].clientX - e.touches[1].clientX,
+            e.touches[0].clientY - e.touches[1].clientY
+          );
+          if (lastDist > 0) {
+            var ratio = dist / lastDist;
+            currentZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, currentZoom * ratio));
+            editorEl.style.zoom = currentZoom;
+          }
+          lastDist = dist;
+        }
+      }, {passive: false});
+
+      editorBody.addEventListener('touchend', function(e) {
+        if (e.touches.length < 2) {
+          isPinching = false;
+          lastDist = 0;
+        }
+      }, {passive: true});
+    })();
+
+    /* ── Intercept pasted/dropped images → compress before insert ── */
+    /* Use capture:true + stopImmediatePropagation to prevent Quill's own
+       clipboard/uploader from ALSO inserting the image (causing duplicates) */
+    quill.root.addEventListener('paste', function(e) {
+      var cd = e.clipboardData;
+      if (!cd || !cd.items) return;
+      for (var i = 0; i < cd.items.length; i++) {
+        if (cd.items[i].type.indexOf('image') === 0) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          var file = cd.items[i].getAsFile();
+          if (!file) return;
+          (async function() {
+            var range = quill.getSelection(true);
+            try {
+              var dataUrl = await compressImage(file);
+              quill.insertEmbed(range.index, 'image', dataUrl, 'user');
+              quill.setSelection(range.index + 1, 0, 'silent');
+              /* Force immediate save */
+              if(saveTimer) clearTimeout(saveTimer);
+              saveCurrentNote();
+            } catch(err) {
+              quill.insertText(range.index, '[Image failed: '+err.message+']', {color:'#DC2626'}, 'user');
+            }
+          })();
+          return;
+        }
+      }
+    }, true);
+
+    quill.root.addEventListener('drop', function(e) {
+      if (!e.dataTransfer || !e.dataTransfer.files || !e.dataTransfer.files.length) return;
+      var file = e.dataTransfer.files[0];
+      if (!file || file.type.indexOf('image') !== 0) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      (async function() {
+        var range = quill.getSelection(true) || {index: quill.getLength()};
+        try {
+          var dataUrl = await compressImage(file);
+          quill.insertEmbed(range.index, 'image', dataUrl, 'user');
+          quill.setSelection(range.index + 1, 0, 'silent');
+          /* Force immediate save */
+          if(saveTimer) clearTimeout(saveTimer);
+          saveCurrentNote();
+        } catch(err) {
+          quill.insertText(range.index, '[Image failed: '+err.message+']', {color:'#DC2626'}, 'user');
+        }
+      })();
+    });
+
+    /* ═══ IMAGE RESIZE ═════════════════════════════════ */
+    (function() {
+      var qlContainer = document.querySelector('.ql-container');
+      var wrap = null;     /* the overlay element */
+      var activeImg = null; /* currently selected img */
+      var startX, startY, startW, startH, ratio, handleType;
+      var dragging = false;
+
+      function createWrap() {
+        wrap = document.createElement('div');
+        wrap.className = 'img-resize-wrap';
+        ['nw','ne','sw','se'].forEach(function(pos) {
+          var h = document.createElement('div');
+          h.className = 'img-handle h-' + pos;
+          h.dataset.handle = pos;
+          h.addEventListener('mousedown', onHandleDown);
+          h.addEventListener('touchstart', onHandleDown, { passive: false });
+          wrap.appendChild(h);
+        });
+        var info = document.createElement('div');
+        info.className = 'img-resize-info';
+        wrap.appendChild(info);
+        qlContainer.appendChild(wrap);
+      }
+
+      function selectImage(img) {
+        if (activeImg === img && wrap) return;
+        deselectImage();
+        activeImg = img;
+        if (!wrap) createWrap();
+        positionWrap();
+        wrap.style.display = 'block';
+      }
+
+      function deselectImage() {
+        activeImg = null;
+        if (wrap) wrap.style.display = 'none';
+      }
+
+      function positionWrap() {
+        if (!activeImg || !wrap) return;
+        var contRect = qlContainer.getBoundingClientRect();
+        var imgRect = activeImg.getBoundingClientRect();
+        wrap.style.left = (imgRect.left - contRect.left + qlContainer.scrollLeft) + 'px';
+        wrap.style.top = (imgRect.top - contRect.top + qlContainer.scrollTop) + 'px';
+        wrap.style.width = imgRect.width + 'px';
+        wrap.style.height = imgRect.height + 'px';
+        var infoEl = wrap.querySelector('.img-resize-info');
+        if (infoEl) infoEl.textContent = Math.round(imgRect.width) + ' × ' + Math.round(imgRect.height);
+      }
+
+      function getEventXY(e) {
+        if (e.touches && e.touches.length > 0) return { x: e.touches[0].clientX, y: e.touches[0].clientY };
+        return { x: e.clientX, y: e.clientY };
+      }
+
+      function onHandleDown(e) {
+        if (!activeImg) return;
+        e.preventDefault();
+        e.stopPropagation();
+        dragging = true;
+        handleType = e.currentTarget.dataset.handle;
+        var pos = getEventXY(e);
+        startX = pos.x;
+        startY = pos.y;
+        startW = activeImg.getBoundingClientRect().width;
+        startH = activeImg.getBoundingClientRect().height;
+        ratio = startH / startW;
+        document.addEventListener('mousemove', onHandleMove);
+        document.addEventListener('mouseup', onHandleUp);
+        document.addEventListener('touchmove', onHandleMove, { passive: false });
+        document.addEventListener('touchend', onHandleUp);
+      }
+
+      function onHandleMove(e) {
+        if (!dragging || !activeImg) return;
+        e.preventDefault();
+        var pos = getEventXY(e);
+        var dx = pos.x - startX;
+        var dy = pos.y - startY;
+        var newW = startW;
+
+        if (handleType === 'se') newW = startW + dx;
+        else if (handleType === 'sw') newW = startW - dx;
+        else if (handleType === 'ne') newW = startW + dx;
+        else if (handleType === 'nw') newW = startW - dx;
+
+        newW = Math.max(40, Math.min(newW, qlContainer.clientWidth - 40));
+        activeImg.style.width = Math.round(newW) + 'px';
+        activeImg.style.height = 'auto';
+        activeImg.removeAttribute('width');
+        activeImg.removeAttribute('height');
+        positionWrap();
+      }
+
+      function onHandleUp(e) {
+        dragging = false;
+        document.removeEventListener('mousemove', onHandleMove);
+        document.removeEventListener('mouseup', onHandleUp);
+        document.removeEventListener('touchmove', onHandleMove);
+        document.removeEventListener('touchend', onHandleUp);
+        if (activeImg) {
+          positionWrap();
+          scheduleSave();
+        }
+      }
+
+      /* Click on image to select */
+      quill.root.addEventListener('click', function(e) {
+        if (e.target.tagName === 'IMG') {
+          e.preventDefault();
+          selectImage(e.target);
+        } else {
+          if (!dragging) deselectImage();
+        }
+      });
+
+      /* Deselect when clicking toolbar or outside */
+      document.querySelector('.ql-toolbar').addEventListener('mousedown', function() {
+        if (!dragging) deselectImage();
+      });
+
+      /* Reposition on scroll */
+      qlContainer.addEventListener('scroll', function() {
+        if (activeImg && wrap && wrap.style.display !== 'none') positionWrap();
+      });
+
+      /* Deselect on text change if image removed */
+      quill.on('text-change', function() {
+        if (activeImg && !quill.root.contains(activeImg)) deselectImage();
+        else if (activeImg && wrap && wrap.style.display !== 'none') {
+          requestAnimationFrame(positionWrap);
+        }
+      });
+    })();
+
+    /* ═══ NEW NOTE DIALOG ══════════════════════════════ */
+    (function() {
+      var nnOverlay = $('#newnote-overlay');
+      var nnTitleInput = $('#newnote-title');
+      var nnSections = $('#newnote-sections');
+      var nnSecLabel = $('#newnote-sec-label');
+      var nnAddBtn = $('#newnote-add-sec');
+      var nnCreateBtn = $('#newnote-create');
+      var nnCancelBtn = $('#newnote-cancel');
+      var nnSubs = $('#newnote-subtitle');
+      var nnSecs = []; /* working copy of section names */
+
+      function openNewNoteDialog() {
+        var specs = S.specialties[S.currentCatId] || [];
+        var specObj = specs.find(function(sp) { return sp.id === S.currentSpecId; });
+        var catObj = S.categories.find(function(c) { return c.id === S.currentCatId; });
+        /* Specialty template overrides category template */
+        var specTpl = (specObj && Array.isArray(specObj.template) && specObj.template.length > 0) ? specObj.template : null;
+        var catTpl = (catObj && Array.isArray(catObj.template) && catObj.template.length > 0) ? catObj.template : null;
+        var template = specTpl || catTpl || [];
+        nnSecs = template.slice();
+
+        nnTitleInput.value = '';
+
+        if (template.length > 0) {
+          nnSubs.textContent = 'Customize sections for this note, then tap Create.';
+          nnSecLabel.style.display = '';
+          nnAddBtn.style.display = '';
+        } else {
+          nnSubs.textContent = 'Enter a title and tap Create. You can add sections below if needed.';
+          nnSecLabel.style.display = '';
+          nnAddBtn.style.display = '';
+        }
+
+        renderNNRows();
+        nnOverlay.classList.add('active');
+        setTimeout(function() { nnTitleInput.focus(); }, 80);
+      }
+      /* expose to global createNote */
+      window.openNewNoteDialog = openNewNoteDialog;
+
+      function renderNNRows() {
+        nnSections.innerHTML = '';
+        if (nnSecs.length === 0) {
+          nnSections.innerHTML = '<div class="newnote-nosec">No sections. The note will start blank.</div>';
+          return;
+        }
+        nnSecs.forEach(function(name, i) {
+          var row = document.createElement('div');
+          row.className = 'tpl-row';
+          var isFirst = i === 0;
+          var isLast = i === nnSecs.length - 1;
+          row.innerHTML =
+            '<span class="tpl-num">' + (i + 1) + '</span>' +
+            '<input type="text" value="' + esc(name) + '" placeholder="Section name">' +
+            '<span class="tpl-btns">' +
+              '<button class="tpl-btn" data-a="up" title="Move up"' + (isFirst ? ' disabled' : '') + '><i class="fas fa-chevron-up"></i></button>' +
+              '<button class="tpl-btn" data-a="down" title="Move down"' + (isLast ? ' disabled' : '') + '><i class="fas fa-chevron-down"></i></button>' +
+              '<button class="tpl-btn danger" data-a="rm" title="Remove"><i class="fas fa-xmark"></i></button>' +
+            '</span>';
+
+          var inp = row.querySelector('input');
+          inp.addEventListener('input', function() { nnSecs[i] = inp.value; });
+
+          row.querySelector('[data-a="up"]').addEventListener('click', function() {
+            if (i > 0) { var tmp = nnSecs[i - 1]; nnSecs[i - 1] = nnSecs[i]; nnSecs[i] = tmp; renderNNRows(); }
+          });
+          row.querySelector('[data-a="down"]').addEventListener('click', function() {
+            if (i < nnSecs.length - 1) { var tmp = nnSecs[i]; nnSecs[i] = nnSecs[i + 1]; nnSecs[i + 1] = tmp; renderNNRows(); }
+          });
+          row.querySelector('[data-a="rm"]').addEventListener('click', function() {
+            nnSecs.splice(i, 1); renderNNRows();
+          });
+
+          nnSections.appendChild(row);
+        });
+      }
+
+      nnAddBtn.addEventListener('click', function() {
+        nnSecs.push('New Section');
+        renderNNRows();
+        var inputs = nnSections.querySelectorAll('input');
+        var last = inputs[inputs.length - 1];
+        if (last) { last.focus(); last.select(); }
+      });
+
+      nnCancelBtn.addEventListener('click', function() { nnOverlay.classList.remove('active'); });
+      nnOverlay.addEventListener('click', function(e) { if (e.target === nnOverlay) nnOverlay.classList.remove('active'); });
+
+      nnCreateBtn.addEventListener('click', function() {
+        var title = nnTitleInput.value.trim() || 'Untitled Note';
+        var cleanSecs = nnSecs.map(function(s) { return s.trim(); }).filter(function(s) { return s; });
+        var content = '';
+        if (cleanSecs.length > 0) {
+          content = cleanSecs.map(function(sec) { return '<h2>' + esc(sec) + '</h2><p><br></p><p><br></p><p><br></p>'; }).join('');
+        }
+        var id = store.add('notes', {
+          title: title,
+          content: content,
+          specialtyId: S.currentSpecId,
+          categoryId: S.currentCatId,
+          order: (S.notes[S.currentSpecId] || []).length,
+          updatedAt: new Date()
+        });
+        nnOverlay.classList.remove('active');
+        if (typeof id === 'string') openNote(id);
+        else if (id && typeof id.then === 'function') id.then(function(rid) { openNote(rid); });
+      });
+
+      /* Enter on title input triggers create */
+      nnTitleInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') nnCreateBtn.click();
+      });
+    })();
+
+    /* ═══ MOVE NOTE ════════════════════════════════════ */
+    let moveNoteId = null;
+    const moveOverlay = $('#move-overlay');
+    const moveCatSel = $('#move-cat-select');
+    const moveSpecSel = $('#move-spec-select');
+    const moveSpecEmpty = $('#move-spec-empty');
+    const moveConfirmBtn = $('#move-confirm');
+
+    function openMoveDialog(noteId, noteTitle) {
+      moveNoteId = noteId;
+      /* find note's current location */
+      let noteCatId = S.currentCatId;
+      let noteSpecId = S.currentSpecId;
+      /* also search through data in case called from editor */
+      for (const catId of Object.keys(S.specialties)) {
+        for (const sp of S.specialties[catId]) {
+          if ((S.notes[sp.id]||[]).find(n=>n.id===noteId)) {
+            noteCatId = catId; noteSpecId = sp.id; break;
+          }
+        }
+      }
+
+      const curCat = S.categories.find(c=>c.id===noteCatId);
+      let curSpec = null;
+      (S.specialties[noteCatId]||[]).forEach(sp=>{ if(sp.id===noteSpecId) curSpec=sp; });
+
+      /* subtitle */
+      $('#move-subtitle').textContent = 'Move "' + (noteTitle||'Untitled Note') + '" to a new location.';
+      /* current badge */
+      const curBadge = $('#move-current');
+      curBadge.innerHTML = '<i class="fas fa-location-dot"></i> Currently in: ' + esc((curCat?curCat.name:'')+ ' › '+(curSpec?curSpec.name:''));
+
+      /* populate category dropdown */
+      moveCatSel.innerHTML = '';
+      S.categories.forEach(cat => {
+        const opt = document.createElement('option');
+        opt.value = cat.id; opt.textContent = cat.name;
+        if (cat.id === noteCatId) opt.selected = true;
+        moveCatSel.appendChild(opt);
+      });
+
+      /* populate specialty dropdown for selected category */
+      populateMoveSpecs(moveCatSel.value, noteSpecId);
+      updateMoveConfirmState(noteCatId, noteSpecId);
+
+      moveOverlay.classList.add('active');
+    }
+
+    function populateMoveSpecs(catId, preselectSpecId) {
+      const cat = S.categories.find(c=>c.id===catId);
+      const sub = getSublabel(cat);
+      $('#move-spec-label').textContent = sub;
+
+      const specs = S.specialties[catId] || [];
+      moveSpecSel.innerHTML = '';
+      moveSpecEmpty.style.display = 'none';
+      moveSpecSel.style.display = 'block';
+
+      if (specs.length === 0) {
+        moveSpecSel.style.display = 'none';
+        moveSpecEmpty.style.display = 'block';
+        moveSpecEmpty.textContent = 'No ' + pluralize(sub, 0).toLowerCase() + ' in this category. Create one first.';
+        moveConfirmBtn.disabled = true;
+        return;
+      }
+
+      specs.forEach(sp => {
+        const opt = document.createElement('option');
+        opt.value = sp.id; opt.textContent = sp.name;
+        if (sp.id === preselectSpecId) opt.selected = true;
+        moveSpecSel.appendChild(opt);
+      });
+    }
+
+    function updateMoveConfirmState(origCatId, origSpecId) {
+      const selCat = moveCatSel.value;
+      const selSpec = moveSpecSel.value;
+      const specs = S.specialties[selCat] || [];
+      /* disable if no specs, or if same location */
+      if (specs.length === 0) { moveConfirmBtn.disabled = true; return; }
+      moveConfirmBtn.disabled = (selCat === origCatId && selSpec === origSpecId);
+    }
+
+    moveCatSel.addEventListener('change', () => {
+      populateMoveSpecs(moveCatSel.value, null);
+      /* find original location of the note being moved */
+      let origCatId = null, origSpecId = null;
+      for (const catId of Object.keys(S.specialties)) {
+        for (const sp of S.specialties[catId]) {
+          if ((S.notes[sp.id]||[]).find(n=>n.id===moveNoteId)) {
+            origCatId = catId; origSpecId = sp.id; break;
+          }
+        }
+        if (origCatId) break;
+      }
+      updateMoveConfirmState(origCatId, origSpecId);
+    });
+
+    moveSpecSel.addEventListener('change', () => {
+      let origCatId = null, origSpecId = null;
+      for (const catId of Object.keys(S.specialties)) {
+        for (const sp of S.specialties[catId]) {
+          if ((S.notes[sp.id]||[]).find(n=>n.id===moveNoteId)) {
+            origCatId = catId; origSpecId = sp.id; break;
+          }
+        }
+        if (origCatId) break;
+      }
+      updateMoveConfirmState(origCatId, origSpecId);
+    });
+
+    $('#move-cancel').addEventListener('click', () => { moveOverlay.classList.remove('active'); moveNoteId = null; });
+    moveOverlay.addEventListener('click', e => { if (e.target === moveOverlay) { moveOverlay.classList.remove('active'); moveNoteId = null; } });
+
+    $('#move-confirm').addEventListener('click', async () => {
+      if (!moveNoteId) return;
+      const destCatId = moveCatSel.value;
+      const destSpecId = moveSpecSel.value;
+      if (!destCatId || !destSpecId) return;
+
+      const destSpecs = S.specialties[destCatId] || [];
+      const destNotes = S.notes[destSpecId] || [];
+
+      try {
+        await store.update('notes', moveNoteId, {
+          categoryId: destCatId,
+          specialtyId: destSpecId,
+          order: destNotes.length
+        });
+
+        /* if currently viewing the editor for this note, update context */
+        if (S.currentNoteId === moveNoteId) {
+          S.currentCatId = destCatId;
+          S.currentSpecId = destSpecId;
+          /* refresh editor crumb */
+          const cat = S.categories.find(c=>c.id===destCatId);
+          const specObj = destSpecs.find(sp=>sp.id===destSpecId);
+          $('#editor-crumb').innerHTML = (cat?esc(cat.name):'') + ' <span style="color:var(--c-text-muted);font-size:12px;font-family:var(--font-main)"> &rsaquo; ' + (specObj?esc(specObj.name):'') + '</span>';
+        }
+      } catch(err) {
+        console.log('Move error: ' + (err.message || err));
+      }
+
+      moveOverlay.classList.remove('active');
+      moveNoteId = null;
+    });
+
+    /* Editor move button */
+    $('#btn-editor-move').addEventListener('click', () => {
+      if (!S.currentNoteId) return;
+      let noteData = null;
+      for (const k of Object.keys(S.notes)) { const f = S.notes[k].find(n=>n.id===S.currentNoteId); if(f){noteData=f;break;} }
+      openMoveDialog(S.currentNoteId, noteData ? noteData.title : $('#note-title').value);
+    });
+
+    /* ═══ TEMPLATE EDITOR ══════════════════════════════ */
+    let tplSpecId = null;
+    let tplCatId = null; /* non-null when editing a category template */
+    let tplSections = [];
+    const tplOverlay = $('#tpl-overlay');
+
+    function openTemplateEditor(specId, catId) {
+      tplSpecId = specId || null;
+      tplCatId = catId || null;
+
+      if (tplCatId) {
+        /* Editing category-level template */
+        var catObj = S.categories.find(function(c){ return c.id === tplCatId; });
+        if (!catObj) return;
+        var sub = getSublabel(catObj);
+        $('#tpl-title').textContent = 'Default Template for "' + catObj.name + '"';
+        $('#tpl-subtitle').textContent = 'This template applies to all ' + pluralize(sub,0).toLowerCase() + ' unless they have their own template.';
+        tplSections = Array.isArray(catObj.template) ? catObj.template.slice() : [];
+      } else {
+        /* Editing specialty-level template */
+        var specObj = null;
+        for (var cid of Object.keys(S.specialties)) {
+          var found = (S.specialties[cid]||[]).find(function(sp){ return sp.id === specId; });
+          if (found) { specObj = found; break; }
+        }
+        if (!specObj) return;
+        var cat = S.categories.find(function(c){ return c.id === S.currentCatId; });
+        var sub2 = getSublabel(cat);
+        var catTpl = (cat && Array.isArray(cat.template) && cat.template.length > 0);
+        $('#tpl-title').textContent = 'Template for "' + specObj.name + '"';
+        $('#tpl-subtitle').textContent = catTpl
+          ? 'Overrides the default category template. Clear all sections to fall back to the category template.'
+          : 'Define sections for new notes in this ' + sub2.toLowerCase() + '. Each section becomes a header.';
+        tplSections = Array.isArray(specObj.template) ? specObj.template.slice() : [];
+      }
+
+      renderTplRows();
+      tplOverlay.classList.add('active');
+    }
+
+    function renderTplRows() {
+      var el = $('#tpl-sections');
+      el.innerHTML = '';
+
+      if (tplSections.length === 0) {
+        el.innerHTML = '<div class="tpl-empty">No sections yet. Tap "Add Section" to start building your template.</div>';
+        return;
+      }
+
+      tplSections.forEach(function(name, i) {
+        var row = document.createElement('div');
+        row.className = 'tpl-row';
+        var isFirst = i === 0;
+        var isLast = i === tplSections.length - 1;
+        row.innerHTML =
+          '<span class="tpl-num">' + (i + 1) + '</span>' +
+          '<input type="text" value="' + esc(name) + '" placeholder="Section name">' +
+          '<span class="tpl-btns">' +
+            '<button class="tpl-btn" data-a="up" title="Move up"' + (isFirst ? ' disabled' : '') + '><i class="fas fa-chevron-up"></i></button>' +
+            '<button class="tpl-btn" data-a="down" title="Move down"' + (isLast ? ' disabled' : '') + '><i class="fas fa-chevron-down"></i></button>' +
+            '<button class="tpl-btn danger" data-a="rm" title="Remove"><i class="fas fa-xmark"></i></button>' +
+          '</span>';
+
+        var inp = row.querySelector('input');
+        inp.addEventListener('input', function() { tplSections[i] = inp.value; });
+
+        row.querySelector('[data-a="up"]').addEventListener('click', function() {
+          if (i > 0) {
+            var tmp = tplSections[i - 1];
+            tplSections[i - 1] = tplSections[i];
+            tplSections[i] = tmp;
+            renderTplRows();
+          }
+        });
+        row.querySelector('[data-a="down"]').addEventListener('click', function() {
+          if (i < tplSections.length - 1) {
+            var tmp = tplSections[i];
+            tplSections[i] = tplSections[i + 1];
+            tplSections[i + 1] = tmp;
+            renderTplRows();
+          }
+        });
+        row.querySelector('[data-a="rm"]').addEventListener('click', function() {
+          tplSections.splice(i, 1);
+          renderTplRows();
+        });
+
+        el.appendChild(row);
+      });
+    }
+
+    $('#tpl-add-btn').addEventListener('click', function() {
+      tplSections.push('New Section');
+      renderTplRows();
+      var inputs = $('#tpl-sections').querySelectorAll('input');
+      var last = inputs[inputs.length - 1];
+      if (last) { last.focus(); last.select(); }
+    });
+
+    $('#tpl-cancel').addEventListener('click', function() { tplOverlay.classList.remove('active'); tplSpecId = null; tplCatId = null; });
+    tplOverlay.addEventListener('click', function(e) { if (e.target === tplOverlay) { tplOverlay.classList.remove('active'); tplSpecId = null; tplCatId = null; } });
+
+    $('#tpl-save').addEventListener('click', async function() {
+      if (!tplSpecId && !tplCatId) return;
+      var cleanSections = tplSections.map(function(s){ return s.trim(); }).filter(function(s){ return s; });
+      try {
+        if (tplCatId) {
+          await store.update('categories', tplCatId, { template: cleanSections });
+        } else {
+          await store.update('specialties', tplSpecId, { template: cleanSections });
+        }
+      } catch(err) {
+        console.log('Template save error: ' + (err.message || err));
+      }
+      tplOverlay.classList.remove('active');
+      tplSpecId = null;
+      tplCatId = null;
+    });
+  </script>
+    <script>
+  /* ── PWA: Manifest for Add to Home Screen ── */
+  (function(){
+    var iconPath='apple-touch-icon.png';
+    var manifest={
+      name:"Jeff Dietetics",
+      short_name:"Dietetics",
+      start_url:".",
+      display:"standalone",
+      orientation:"portrait",
+      background_color:"#0A3A28",
+      theme_color:"#124B34",
+      icons:[
+        {src:iconPath,sizes:"512x512",type:"image/png",purpose:"any maskable"}
+      ]
+    };
+    var mb=new Blob([JSON.stringify(manifest)],{type:'application/json'});
+    var ml=document.createElement('link');
+    ml.rel='manifest'; ml.href=URL.createObjectURL(mb);
+    document.head.appendChild(ml);
+  })();
+  </script>
+</body>
+</html>
