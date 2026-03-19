@@ -2207,10 +2207,125 @@
         });
       }
 
-      /* Also run after paste in case pasted content contains tables (e.g. from OneNote) */
-      quill.root.addEventListener('paste', function() {
-        setTimeout(makeTableCellsEditable, 150);
-      });
+      /* ── Intercept pasted tables (e.g. from OneNote) ──
+         OneNote wraps each line in a cell with <p> or <div> tags.
+         Quill's clipboard flattens these, turning multi-line cells
+         into separate columns/rows. Fix: pre-process the HTML,
+         collapsing block elements inside cells to <br> joins,
+         then insert via dangerouslyPasteHTML. */
+      quill.root.addEventListener('paste', function(e) {
+        var cd = e.clipboardData;
+        if (!cd) return;
+        var html = cd.getData('text/html');
+        if (!html) return;
+        /* Only intercept if the paste contains a table */
+        if (html.toLowerCase().indexOf('<table') === -1) {
+          /* No table — just ensure cells are editable after paste */
+          setTimeout(makeTableCellsEditable, 150);
+          return;
+        }
+
+        /* Has table — pre-process it ourselves */
+        e.preventDefault();
+        e.stopImmediatePropagation();
+
+        var tmp = document.createElement('div');
+        tmp.innerHTML = html;
+
+        /* Clean each cell: convert block elements to <br>-separated inline content */
+        tmp.querySelectorAll('td, th').forEach(function(cell) {
+          /* Collect text from block children (p, div, li, h1-h6) */
+          var blocks = cell.querySelectorAll('p, div, li, h1, h2, h3, h4, h5, h6');
+          if (blocks.length > 1) {
+            var lines = [];
+            blocks.forEach(function(b) {
+              var inner = b.innerHTML.replace(/<br\s*\/?>\s*$/i, '').trim();
+              if (inner) lines.push(inner);
+            });
+            cell.innerHTML = lines.join('<br>');
+          } else if (blocks.length === 1) {
+            /* Single block — just unwrap it */
+            cell.innerHTML = blocks[0].innerHTML;
+          }
+          /* Ensure cell has at least a <br> so it's not empty */
+          if (!cell.innerHTML.trim()) cell.innerHTML = '<br>';
+        });
+
+        /* Remove any OneNote-specific wrapper elements outside the table */
+        var tables = tmp.querySelectorAll('table');
+        var cleanHTML = '';
+        tables.forEach(function(tbl) {
+          /* Ensure all cells have contenteditable */
+          tbl.querySelectorAll('td, th').forEach(function(c) {
+            c.setAttribute('contenteditable', 'true');
+          });
+          /* Ensure table has tbody */
+          if (!tbl.querySelector('tbody')) {
+            var tbody = document.createElement('tbody');
+            while (tbl.rows.length > 0) tbody.appendChild(tbl.rows[0]);
+            tbl.appendChild(tbody);
+          }
+          cleanHTML += tbl.outerHTML;
+        });
+        /* Also include any non-table content from the paste */
+        var nonTableContent = '';
+        tmp.childNodes.forEach(function(node) {
+          if (node.nodeType === 1 && node.tagName === 'TABLE') return;
+          if (node.nodeType === 1) nonTableContent += node.outerHTML;
+          else if (node.nodeType === 3 && node.textContent.trim()) nonTableContent += node.textContent;
+        });
+        cleanHTML = nonTableContent + cleanHTML + '<p><br></p>';
+
+        /* Insert via dangerouslyPasteHTML */
+        var range = quill.getSelection(true);
+        var idx = range ? range.index : quill.getLength() - 1;
+        quill.clipboard.dangerouslyPasteHTML(idx, cleanHTML, 'user');
+        setTimeout(makeTableCellsEditable, 100);
+      }, true); /* capture phase — runs before Quill's clipboard */
+
+      /* ── Enter key inside table cells → insert <br> instead of new paragraph ──
+         Quill's default Enter handler creates new <p> blocks which break tables.
+         We intercept Enter when cursor is inside a td/th and insert <br> instead. */
+      quill.root.addEventListener('keydown', function(e) {
+        if (e.key !== 'Enter') return;
+        /* Allow Shift+Enter to also create <br> inside cells (same behavior) */
+        var sel = window.getSelection();
+        if (!sel || sel.rangeCount === 0) return;
+        var node = sel.anchorNode;
+        var el = (node.nodeType === 3) ? node.parentElement : node;
+        if (!el || !el.closest) return;
+        var cell = el.closest('td, th');
+        if (!cell) return;
+
+        /* We're inside a table cell — handle Enter ourselves */
+        e.preventDefault();
+        e.stopImmediatePropagation();
+
+        var range = sel.getRangeAt(0);
+        range.deleteContents();
+
+        /* Insert <br> */
+        var br = document.createElement('br');
+        range.insertNode(br);
+
+        /* Add a zero-width space after the <br> so cursor can be placed there */
+        var spacer = document.createTextNode('\u200B');
+        if (br.nextSibling) {
+          br.parentNode.insertBefore(spacer, br.nextSibling);
+        } else {
+          br.parentNode.appendChild(spacer);
+        }
+
+        /* Move cursor after the spacer */
+        var newRange = document.createRange();
+        newRange.setStartAfter(spacer);
+        newRange.setEndAfter(spacer);
+        sel.removeAllRanges();
+        sel.addRange(newRange);
+
+        /* Trigger auto-save */
+        if (typeof scheduleSave === 'function') scheduleSave({}, {}, 'user');
+      }, true); /* capture phase — runs before Quill's keyboard handler */
 
       var ctxTargetCell = null;
 
