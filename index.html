@@ -2295,13 +2295,13 @@
         setTimeout(makeTableCellsEditable, 100);
       }, true); /* capture phase — runs before Quill's clipboard */
 
-      /* ── Enter key inside table cells → insert <br> instead of new paragraph ──
+      /* ── Enter key inside table cells → native line break ──
          Quill's default Enter handler creates new <p> blocks which break tables.
-         We intercept Enter when cursor is inside a td/th and insert <br> instead.
-         IMPORTANT: Do NOT pass the result through loadNoteHTML — Quill's clipboard
-         converter mangles <br> inside cells into extra columns. Instead, use
-         quill.disable/enable to freeze the MutationObserver during the insert,
-         then let Quill reconcile on re-enable without re-parsing. */
+         We intercept Enter when cursor is inside a td/th to block Quill's handler,
+         but we let the browser's native contenteditable Enter behaviour work
+         (which inserts a <br> naturally without triggering MutationObserver issues).
+         KEY: e.stopImmediatePropagation() blocks Quill, but we do NOT call
+         e.preventDefault() so the browser inserts the line break natively. */
       quill.root.addEventListener('keydown', function(e) {
         if (e.key !== 'Enter') return;
         var sel = window.getSelection();
@@ -2312,41 +2312,15 @@
         var cell = el.closest('td, th');
         if (!cell) return;
 
-        /* We're inside a table cell — handle Enter ourselves */
-        e.preventDefault();
+        /* Block Quill's keyboard handler from firing */
         e.stopImmediatePropagation();
+        /* Do NOT call e.preventDefault() — let the browser handle Enter
+           natively in the contenteditable cell (inserts <br>) */
 
-        /* Freeze Quill — disconnects MutationObserver */
-        quill.disable();
-        cell.setAttribute('contenteditable', 'true');
-
-        /* Insert <br> at cursor position */
-        var rng = sel.getRangeAt(0);
-        rng.deleteContents();
-        var br = document.createElement('br');
-        rng.insertNode(br);
-
-        /* Ensure there's content after <br> for cursor placement */
-        if (!br.nextSibling) {
-          cell.appendChild(document.createElement('br'));
-        }
-
-        /* Move cursor right after the <br> */
-        var newRng = document.createRange();
-        newRng.setStartAfter(br);
-        newRng.collapse(true);
-        sel.removeAllRanges();
-        sel.addRange(newRng);
-
-        /* Re-enable Quill — MutationObserver reconnects and sees the <br>.
-           Do NOT call loadNoteHTML here — it re-parses through Quill's clipboard
-           which turns <br> inside cells into extra columns. */
-        quill.enable();
-        /* Re-set contenteditable on all cells (quill.enable resets root) */
-        makeTableCellsEditable();
-
-        /* Trigger auto-save */
-        if (typeof scheduleSave === 'function') scheduleSave({}, {}, 'user');
+        /* Schedule auto-save after the browser inserts the line break */
+        setTimeout(function() {
+          if (typeof scheduleSave === 'function') scheduleSave({}, {}, 'user');
+        }, 50);
       }, true); /* capture phase — runs before Quill's keyboard handler */
 
       var ctxTargetCell = null;
