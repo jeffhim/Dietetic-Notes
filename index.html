@@ -429,8 +429,8 @@
       white-space:nowrap; pointer-events:none; box-shadow:var(--shadow-sm);
     }
     /* ── TABLE STYLES ─────────────────────────── */
-    .ql-editor table { width:100%; border-collapse:collapse; margin:12px 0; font-size:14px; }
-    .ql-editor table td, .ql-editor table th { border:1px solid var(--c-border); padding:8px 10px; text-align:left; min-width:40px; vertical-align:top; }
+    .ql-editor table { width:100%; border-collapse:collapse; table-layout:fixed; margin:12px 0; font-size:14px; }
+    .ql-editor table td, .ql-editor table th { border:1px solid var(--c-border); padding:8px 10px; text-align:left; min-width:40px; vertical-align:top; word-wrap:break-word; overflow-wrap:break-word; cursor:text; position:relative; }
     .ql-editor table th { background:var(--c-surface-2); font-weight:700; font-size:13px; }
     .ql-editor table tr:nth-child(even) td { background:rgba(45,212,191,0.03); }
     html.dark .ql-editor table tr:nth-child(even) td { background:rgba(45,212,191,0.04); }
@@ -2232,8 +2232,12 @@
         var tmp = document.createElement('div');
         tmp.innerHTML = html;
 
-        /* Clean each cell: convert block elements to <br>-separated inline content */
+        /* Clean each cell: convert block elements to <br>-separated inline content
+           and strip inline styles (width, height, etc.) that apps like OneNote add */
         tmp.querySelectorAll('td, th').forEach(function(cell) {
+          /* Strip inline styles that cause uneven column widths */
+          cell.removeAttribute('style');
+          cell.removeAttribute('width');
           /* Collect text from block children (p, div, li, h1-h6) */
           var blocks = cell.querySelectorAll('p, div, li, h1, h2, h3, h4, h5, h6');
           if (blocks.length > 1) {
@@ -2250,6 +2254,14 @@
           /* Ensure cell has at least a <br> so it's not empty */
           if (!cell.innerHTML.trim()) cell.innerHTML = '<br>';
         });
+        /* Strip inline styles from table, colgroup, col elements too */
+        tmp.querySelectorAll('table, colgroup, col, tr, thead, tbody').forEach(function(el) {
+          el.removeAttribute('style');
+          el.removeAttribute('width');
+          el.removeAttribute('height');
+        });
+        /* Remove colgroup elements entirely (they set fixed column widths) */
+        tmp.querySelectorAll('colgroup').forEach(function(cg) { cg.remove(); });
 
         /* Remove any OneNote-specific wrapper elements outside the table */
         var tables = tmp.querySelectorAll('table');
@@ -2285,10 +2297,11 @@
 
       /* ── Enter key inside table cells → insert <br> instead of new paragraph ──
          Quill's default Enter handler creates new <p> blocks which break tables.
-         We intercept Enter when cursor is inside a td/th and insert <br> instead. */
+         We intercept Enter when cursor is inside a td/th and insert <br> instead.
+         Must use quill.disable/enable to prevent Quill's MutationObserver
+         from immediately removing our DOM changes. */
       quill.root.addEventListener('keydown', function(e) {
         if (e.key !== 'Enter') return;
-        /* Allow Shift+Enter to also create <br> inside cells (same behavior) */
         var sel = window.getSelection();
         if (!sel || sel.rangeCount === 0) return;
         var node = sel.anchorNode;
@@ -2301,27 +2314,55 @@
         e.preventDefault();
         e.stopImmediatePropagation();
 
-        var range = sel.getRangeAt(0);
-        range.deleteContents();
+        /* Remember which cell we're in so we can restore cursor after reload */
+        var table = cell.closest('table');
+        var allTables = Array.from(quill.root.querySelectorAll('table'));
+        var tableIdx = allTables.indexOf(table);
+        var row = cell.closest('tr');
+        var rowIdx = row ? Array.from(table.querySelectorAll('tr')).indexOf(row) : 0;
+        var cellIdx = row ? Array.from(row.children).indexOf(cell) : 0;
 
-        /* Insert <br> */
+        /* Freeze Quill — disconnects MutationObserver */
+        quill.disable();
+        cell.setAttribute('contenteditable', 'true');
+
+        /* Insert <br> at cursor position */
+        var rng = sel.getRangeAt(0);
+        rng.deleteContents();
         var br = document.createElement('br');
-        range.insertNode(br);
+        rng.insertNode(br);
 
-        /* Add a zero-width space after the <br> so cursor can be placed there */
-        var spacer = document.createTextNode('\u200B');
-        if (br.nextSibling) {
-          br.parentNode.insertBefore(spacer, br.nextSibling);
-        } else {
-          br.parentNode.appendChild(spacer);
+        /* Ensure there's content after <br> for cursor placement */
+        if (!br.nextSibling) {
+          cell.appendChild(document.createElement('br'));
         }
 
-        /* Move cursor after the spacer */
-        var newRange = document.createRange();
-        newRange.setStartAfter(spacer);
-        newRange.setEndAfter(spacer);
-        sel.removeAllRanges();
-        sel.addRange(newRange);
+        /* Capture the full editor HTML with the new <br> */
+        var safeHTML = quill.root.innerHTML;
+
+        /* Re-enable Quill and force it to accept the new HTML */
+        quill.enable();
+        loadNoteHTML(safeHTML, true); /* keepHistory=true so undo still works */
+
+        /* Restore cursor into the correct cell */
+        setTimeout(function() {
+          makeTableCellsEditable();
+          var tables = quill.root.querySelectorAll('table');
+          if (!tables[tableIdx]) return;
+          var rows = tables[tableIdx].querySelectorAll('tr');
+          if (!rows[rowIdx]) return;
+          var cells = rows[rowIdx].children;
+          if (!cells[cellIdx]) return;
+          var targetCell = cells[cellIdx];
+          targetCell.focus();
+          /* Place cursor at end of cell content */
+          var range = document.createRange();
+          range.selectNodeContents(targetCell);
+          range.collapse(false); /* collapse to end */
+          var s = window.getSelection();
+          s.removeAllRanges();
+          s.addRange(range);
+        }, 60);
 
         /* Trigger auto-save */
         if (typeof scheduleSave === 'function') scheduleSave({}, {}, 'user');
@@ -2550,18 +2591,40 @@
         positionFloatBar(cell);
       }
 
-      /* Listen for clicks on editor */
+      /* Listen for clicks on editor — explicitly focus cell so cursor goes inside it */
       quill.root.addEventListener('click', function(e) {
         var cell = e.target.closest('td, th');
         if (cell) {
           onCellFocus(cell);
+          /* Ensure the cell actually receives focus so typing works */
+          if (document.activeElement !== cell) {
+            cell.focus();
+            /* Place cursor at click position using caretPositionFromPoint / caretRangeFromPoint */
+            var sel = window.getSelection();
+            var range = null;
+            if (document.caretRangeFromPoint) {
+              range = document.caretRangeFromPoint(e.clientX, e.clientY);
+            } else if (document.caretPositionFromPoint) {
+              var pos = document.caretPositionFromPoint(e.clientX, e.clientY);
+              if (pos) {
+                range = document.createRange();
+                range.setStart(pos.offsetNode, pos.offset);
+                range.collapse(true);
+              }
+            }
+            if (range) {
+              sel.removeAllRanges();
+              sel.addRange(range);
+            }
+          }
         } else {
           hideFloatBar();
         }
       });
 
-      /* Listen for touch on mobile */
+      /* Listen for touch on mobile — ensure tapped cell receives focus */
       quill.root.addEventListener('touchend', function(e) {
+        var touchTarget = e.target ? e.target.closest('td, th') : null;
         setTimeout(function() {
           var active = document.activeElement;
           var cell = null;
@@ -2574,6 +2637,11 @@
               var el = sel.anchorNode.nodeType === 1 ? sel.anchorNode : sel.anchorNode.parentElement;
               cell = el ? el.closest('td, th') : null;
             }
+          }
+          /* Fallback to the touch target if selection didn't land in a cell */
+          if (!cell && touchTarget) {
+            cell = touchTarget;
+            cell.focus();
           }
           if (cell && cell.closest('.ql-editor')) {
             onCellFocus(cell);
@@ -3846,36 +3914,4 @@
       tmp.innerHTML = html;
       var imgEls = tmp.querySelectorAll('img[src]');
       var srcMap = {};
-      imgEls.forEach(function(img, i) {
-        var src = img.getAttribute('src');
-        if (src && src.length > 200) {
-          var key = 'data:,IMG' + i;
-          srcMap[key] = src;
-          img.setAttribute('src', key);
-        }
-      });
-
-      /* 2. Let Quill convert the lightweight HTML → Delta */
-      var delta = quill.clipboard.convert({html: tmp.innerHTML});
-
-      /* 3. Restore real image sources in the delta ops */
-      delta.ops.forEach(function(op) {
-        if (op.insert && op.insert.image && srcMap[op.insert.image]) {
-          op.insert.image = srcMap[op.insert.image];
-        }
-      });
-
-      /* 4. Apply to editor */
-      quill.setContents(delta, 'silent');
-
-      /* 5. Verify images survived conversion — fallback to innerHTML if any were lost */
-      var actualImgs = quill.root.querySelectorAll('img').length;
-      if (actualImgs < expectedImgs) {
-        quill.root.innerHTML = html;
-        try { quill.update('silent'); } catch(e) { /* images display even if Quill state sync fails */ }
-      }
-
-      if (!keepHistory) quill.getModule('history').clear();
-    }
-
-    function open...
+      imgEls.forEach(func...
