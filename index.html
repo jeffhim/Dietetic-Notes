@@ -3914,4 +3914,96 @@
       tmp.innerHTML = html;
       var imgEls = tmp.querySelectorAll('img[src]');
       var srcMap = {};
-      imgEls.forEach(func...
+      imgEls.forEach(function(img, i) {
+        var src = img.getAttribute('src');
+        if (src && src.length > 200) {
+          var key = 'data:,IMG' + i;
+          srcMap[key] = src;
+          img.setAttribute('src', key);
+        }
+      });
+
+      /* 2. Let Quill convert the lightweight HTML → Delta */
+      var delta = quill.clipboard.convert({html: tmp.innerHTML});
+
+      /* 3. Restore real image sources in the delta ops */
+      delta.ops.forEach(function(op) {
+        if (op.insert && op.insert.image && srcMap[op.insert.image]) {
+          op.insert.image = srcMap[op.insert.image];
+        }
+      });
+
+      /* 4. Apply to editor */
+      quill.setContents(delta, 'silent');
+
+      /* 5. Verify images survived conversion — fallback to innerHTML if any were lost */
+      var actualImgs = quill.root.querySelectorAll('img').length;
+      if (actualImgs < expectedImgs) {
+        quill.root.innerHTML = html;
+        try { quill.update('silent'); } catch(e) { /* images display even if Quill state sync fails */ }
+      }
+
+      if (!keepHistory) quill.getModule('history').clear();
+
+      /* Ensure any tables in the loaded content have editable cells.
+         NOTE: Cannot call makeTableCellsEditable() here because it's
+         defined inside the TABLE IIFE (different scope). Inline the logic. */
+      setTimeout(function() {
+        var tableCells = quill.root.querySelectorAll('table td:not([contenteditable]), table th:not([contenteditable])');
+        tableCells.forEach(function(c) { c.setAttribute('contenteditable', 'true'); });
+      }, 50);
+    }
+
+    function openNote(noteId) {
+      saveCurrentNote();
+      S.currentNoteId=noteId;
+      let noteData=null;
+      for(const k of Object.keys(S.notes)){ const f=S.notes[k].find(n=>n.id===noteId); if(f){noteData=f;break;} }
+      if(!noteData) return;
+      const cat=S.categories.find(c=>c.id===S.currentCatId);
+      let specObj=null; (S.specialties[S.currentCatId]||[]).forEach(sp=>{ if(sp.id===S.currentSpecId) specObj=sp; });
+      $('#editor-crumb').innerHTML = (cat?esc(cat.name):'') + ' <span style="color:var(--c-text-muted);font-size:12px;font-family:var(--font-main)"> &rsaquo; ' + (specObj?esc(specObj.name):'') + '</span>';
+      $('#note-title').value=noteData.title||'';
+      $('#note-meta').textContent=noteData.updatedAt ? 'Last updated: '+fmtDateLong(noteData.updatedAt) : '';
+      /* Load note content — protect base64 images from Quill's HTML conversion */
+      loadNoteHTML(noteData.content || '');
+      /* Record to search history */
+      var crumbParts = [];
+      if (cat) crumbParts.push(cat.name);
+      if (specObj) crumbParts.push(specObj.name);
+      addToHistory({ type:'note', id:noteId, name:noteData.title||'Untitled Note', crumb:crumbParts.join(' \u203A '), catId:S.currentCatId, specId:S.currentSpecId });
+      showView('view-editor');
+    }
+    $('#back-to-notes').addEventListener('click',()=>{ saveCurrentNote(); S.currentNoteId=null; showView('view-notes'); });
+
+    /* ── Auto-save ────────────────────────────────── */
+    let saveTimer=null;
+    var lastLoadedContent = null; /* tracks what we last loaded/saved to detect real remote changes */
+    function scheduleSave(delta, oldDelta, source) { if(source && source !== 'user') return; if(saveTimer) clearTimeout(saveTimer); saveTimer=setTimeout(saveCurrentNote,1000); }
+    async function saveCurrentNote() {
+      saveTimer=null; /* reset so onSnapshot sync check works */
+      if(!S.currentNoteId||!store) return;
+      const title=$('#note-title').value.trim()||'Untitled Note';
+      const content=quill.root.innerHTML;
+      /* ── CRITICAL: set lastLoadedContent BEFORE the await ──
+         Without this, onSnapshot fires during await, sees
+         serverHTML !== lastLoadedContent (still old), calls
+         loadNoteHTML → history.clear(), wiping ALL undo history
+         on every single auto-save! */
+      lastLoadedContent = content;
+      const ss=$('#save-status');
+      ss.innerHTML='<i class="fas fa-circle-notch fa-spin"></i> Saving\u2026'; ss.className='save-status saving';
+      try{ await store.update('notes',S.currentNoteId,{title,content});
+        ss.innerHTML='<i class="fas fa-check"></i> Saved'; ss.className='save-status saved';
+      }catch(e){
+        var msg = (e.message && e.message.indexOf('exceeds the maximum') !== -1) ? 'Note too large — try removing some images' : 'Save error';
+        ss.innerHTML='<i class="fas fa-exclamation-circle"></i> ' + msg; ss.className='save-status error';
+      }
+    }
+    quill.on('text-change',scheduleSave);
+    $('#note-title').addEventListener('input',scheduleSave);
+
+    /* ── Add Section button ── */
+    var addSecCursorPos = null;
+    $('#btn-add-section').addEventListener('click', function() {
+      /* Remember cursor position before dialog opens */...
