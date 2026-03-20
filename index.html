@@ -2298,8 +2298,10 @@
       /* ── Enter key inside table cells → insert <br> instead of new paragraph ──
          Quill's default Enter handler creates new <p> blocks which break tables.
          We intercept Enter when cursor is inside a td/th and insert <br> instead.
-         Must use quill.disable/enable to prevent Quill's MutationObserver
-         from immediately removing our DOM changes. */
+         IMPORTANT: Do NOT pass the result through loadNoteHTML — Quill's clipboard
+         converter mangles <br> inside cells into extra columns. Instead, use
+         quill.disable/enable to freeze the MutationObserver during the insert,
+         then let Quill reconcile on re-enable without re-parsing. */
       quill.root.addEventListener('keydown', function(e) {
         if (e.key !== 'Enter') return;
         var sel = window.getSelection();
@@ -2313,14 +2315,6 @@
         /* We're inside a table cell — handle Enter ourselves */
         e.preventDefault();
         e.stopImmediatePropagation();
-
-        /* Remember which cell we're in so we can restore cursor after reload */
-        var table = cell.closest('table');
-        var allTables = Array.from(quill.root.querySelectorAll('table'));
-        var tableIdx = allTables.indexOf(table);
-        var row = cell.closest('tr');
-        var rowIdx = row ? Array.from(table.querySelectorAll('tr')).indexOf(row) : 0;
-        var cellIdx = row ? Array.from(row.children).indexOf(cell) : 0;
 
         /* Freeze Quill — disconnects MutationObserver */
         quill.disable();
@@ -2337,32 +2331,19 @@
           cell.appendChild(document.createElement('br'));
         }
 
-        /* Capture the full editor HTML with the new <br> */
-        var safeHTML = quill.root.innerHTML;
+        /* Move cursor right after the <br> */
+        var newRng = document.createRange();
+        newRng.setStartAfter(br);
+        newRng.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(newRng);
 
-        /* Re-enable Quill and force it to accept the new HTML */
+        /* Re-enable Quill — MutationObserver reconnects and sees the <br>.
+           Do NOT call loadNoteHTML here — it re-parses through Quill's clipboard
+           which turns <br> inside cells into extra columns. */
         quill.enable();
-        loadNoteHTML(safeHTML, true); /* keepHistory=true so undo still works */
-
-        /* Restore cursor into the correct cell */
-        setTimeout(function() {
-          makeTableCellsEditable();
-          var tables = quill.root.querySelectorAll('table');
-          if (!tables[tableIdx]) return;
-          var rows = tables[tableIdx].querySelectorAll('tr');
-          if (!rows[rowIdx]) return;
-          var cells = rows[rowIdx].children;
-          if (!cells[cellIdx]) return;
-          var targetCell = cells[cellIdx];
-          targetCell.focus();
-          /* Place cursor at end of cell content */
-          var range = document.createRange();
-          range.selectNodeContents(targetCell);
-          range.collapse(false); /* collapse to end */
-          var s = window.getSelection();
-          s.removeAllRanges();
-          s.addRange(range);
-        }, 60);
+        /* Re-set contenteditable on all cells (quill.enable resets root) */
+        makeTableCellsEditable();
 
         /* Trigger auto-save */
         if (typeof scheduleSave === 'function') scheduleSave({}, {}, 'user');
