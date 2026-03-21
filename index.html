@@ -436,13 +436,12 @@
     html.dark .ql-editor table tr:nth-child(even) td { background:rgba(45,212,191,0.04); }
     .ql-editor table td:focus { outline:2px solid var(--c-primary); outline-offset:-2px; background:rgba(45,212,191,0.06); }
 
-    /* ── Table resize handles ─────────────────── */
-    .tbl-col-resize-handle { position:absolute; top:0; right:-3px; width:6px; height:100%; cursor:col-resize; z-index:5; background:transparent; }
-    .tbl-col-resize-handle:hover, .tbl-col-resize-handle.active { background:var(--c-primary); opacity:0.5; }
-    .tbl-row-resize-handle { position:absolute; bottom:-3px; left:0; width:100%; height:6px; cursor:row-resize; z-index:5; background:transparent; }
-    .tbl-row-resize-handle:hover, .tbl-row-resize-handle.active { background:var(--c-primary); opacity:0.5; }
+    /* ── Table resize ─────────────────── */
     .ql-editor table.tbl-resizing { user-select:none; -webkit-user-select:none; }
     .ql-editor table.tbl-resizing td, .ql-editor table.tbl-resizing th { user-select:none; -webkit-user-select:none; }
+    .tbl-resize-line { position:fixed; z-index:999; pointer-events:none; }
+    .tbl-resize-line.col { width:2px; background:var(--c-primary); cursor:col-resize; }
+    .tbl-resize-line.row { height:2px; background:var(--c-primary); cursor:row-resize; }
 
     /* Table insert grid picker */
     .tbl-picker-wrap { position:relative; display:inline-block; }
@@ -2204,8 +2203,8 @@
         /* Insert via clipboard (pasteHTML) to preserve HTML structure */
         var idx = range ? range.index : quill.getLength() - 1;
         quill.clipboard.dangerouslyPasteHTML(idx, html, 'user');
-        /* Make cells editable + add resize handles */
-        setTimeout(function() { makeTableCellsEditable(); addResizeHandles(); }, 50);
+        /* Make cells editable */
+        setTimeout(function() { makeTableCellsEditable(); }, 50);
       }
 
       /* Make table cells editable — only called after table insert or paste, NOT on every keystroke */
@@ -2237,80 +2236,80 @@
           return;
         }
 
-        /* Has table — pre-process it ourselves.
-           BYPASS Quill's clipboard.convert/dangerouslyPasteHTML entirely
-           because they mangle table structure (splitting cells/characters). */
+        /* Has table — extract clean 2D data and rebuild using buildTableHTML,
+           then insert using the same proven path as execTableAction
+           (quill.disable → DOM insert → capture innerHTML → quill.enable → loadNoteHTML).
+           This completely avoids OneNote's messy HTML touching Quill's converter. */
         e.preventDefault();
         e.stopImmediatePropagation();
 
         var tmp = document.createElement('div');
         tmp.innerHTML = html;
 
-        /* ── Deep-clean OneNote/Word HTML ── */
-        /* 1. Strip ALL <span> wrappers but keep their text (OneNote wraps every
-              word/run in <span style="..."> which confuses Quill) */
-        tmp.querySelectorAll('span').forEach(function(span) {
-          /* Replace span with its children (text nodes and inline elements) */
-          while (span.firstChild) span.parentNode.insertBefore(span.firstChild, span);
-          span.remove();
-        });
+        /* ── Extract 2D text arrays from each table in the pasted HTML ── */
+        var pastedTables = tmp.querySelectorAll('table');
+        if (!pastedTables.length) return;
 
-        /* 2. Strip MSO-specific elements */
-        tmp.querySelectorAll('o\\:p, xml, style, meta, link, head').forEach(function(el) { el.remove(); });
-
-        /* 3. Clean each cell: convert block elements to <br>-separated content
-              and strip ALL attributes (width, height, style, class, etc.) */
-        tmp.querySelectorAll('td, th').forEach(function(cell) {
-          /* Strip ALL attributes from the cell itself */
-          while (cell.attributes.length > 0) cell.removeAttribute(cell.attributes[0].name);
-          /* Collect text from block children (p, div, li, h1-h6) */
-          var blocks = cell.querySelectorAll('p, div, li, h1, h2, h3, h4, h5, h6');
-          if (blocks.length > 1) {
-            var lines = [];
-            blocks.forEach(function(b) {
-              var txt = b.textContent.trim();
-              if (txt) lines.push(txt);
+        var allTableHTMLs = [];
+        pastedTables.forEach(function(tbl) {
+          var data = [];
+          var hasHeader = tbl.querySelector('thead') !== null;
+          var rows = tbl.querySelectorAll('tr');
+          rows.forEach(function(row) {
+            var rowData = [];
+            var cells = row.querySelectorAll('td, th');
+            cells.forEach(function(cell) {
+              /* Deep-extract text with line breaks preserved:
+                 Replace <br> with \n markers, insert \n after block elements,
+                 then get textContent, trim, and convert \n back to <br> */
+              var clone = cell.cloneNode(true);
+              /* Remove any nested tables (shouldn't be there but just in case) */
+              clone.querySelectorAll('table').forEach(function(nt) { nt.remove(); });
+              /* Mark <br> as line breaks */
+              clone.querySelectorAll('br').forEach(function(br) {
+                br.replaceWith('\n');
+              });
+              /* Mark block element boundaries as line breaks */
+              clone.querySelectorAll('p, div, li, h1, h2, h3, h4, h5, h6').forEach(function(b) {
+                b.insertAdjacentText('beforebegin', '\n');
+              });
+              var text = clone.textContent;
+              /* Clean up: collapse multiple newlines, trim */
+              text = text.replace(/\n{3,}/g, '\n\n').trim();
+              /* Convert newlines to <br> for HTML */
+              var cellHTML = text ? text.replace(/\n/g, '<br>') : '<br>';
+              rowData.push(cellHTML);
             });
-            cell.innerHTML = lines.join('<br>');
-          } else if (blocks.length === 1) {
-            /* Single block — use textContent to strip ALL inner markup */
-            cell.textContent = blocks[0].textContent;
+            if (rowData.length > 0) data.push(rowData);
+          });
+
+          if (data.length === 0) return;
+
+          /* Normalize column count (pad short rows) */
+          var colCount = 0;
+          for (var i = 0; i < data.length; i++) {
+            if (data[i].length > colCount) colCount = data[i].length;
           }
-          /* Ensure cell has at least a <br> so it's not empty */
-          if (!cell.innerHTML.trim()) cell.innerHTML = '<br>';
-        });
-
-        /* 4. Strip attributes from table, tr, thead, tbody */
-        tmp.querySelectorAll('table, tr, thead, tbody, tfoot').forEach(function(el) {
-          while (el.attributes.length > 0) el.removeAttribute(el.attributes[0].name);
-        });
-        /* Remove colgroup elements entirely */
-        tmp.querySelectorAll('colgroup').forEach(function(cg) { cg.remove(); });
-
-        /* 5. Build minimal clean table HTML */
-        var tables = tmp.querySelectorAll('table');
-        var cleanHTML = '';
-        tables.forEach(function(tbl) {
-          /* Ensure table has tbody */
-          if (!tbl.querySelector('tbody')) {
-            var tbody = document.createElement('tbody');
-            while (tbl.rows.length > 0) tbody.appendChild(tbl.rows[0]);
-            tbl.appendChild(tbody);
+          for (var j = 0; j < data.length; j++) {
+            while (data[j].length < colCount) data[j].push('<br>');
           }
-          cleanHTML += tbl.outerHTML;
+
+          /* Build clean table HTML using the proven buildTableHTML function */
+          allTableHTMLs.push(buildTableHTML(data, hasHeader));
         });
-        if (!cleanHTML) return; /* No valid tables found */
-        cleanHTML += '<p><br></p>';
 
-        /* ── Insert directly into DOM, completely bypassing Quill's converter ── */
-        quill.disable(); /* Freeze MutationObserver */
+        if (allTableHTMLs.length === 0) return;
 
-        /* Find cursor position or append at end */
+        var cleanTableHTML = allTableHTMLs.join('') + '<p><br></p>';
+
+        /* ── Insert using the same proven path as execTableAction ── */
+        quill.disable();
+
+        /* Insert the table HTML at cursor position in DOM */
         var sel = window.getSelection();
         var insertTarget = null;
         if (sel && sel.rangeCount > 0) {
           var rng = sel.getRangeAt(0);
-          /* Walk up to find the block-level element to insert after */
           var block = rng.startContainer;
           if (block.nodeType === 3) block = block.parentElement;
           while (block && block !== quill.root && block.parentElement !== quill.root) {
@@ -2319,36 +2318,23 @@
           insertTarget = block;
         }
 
-        /* Create a document fragment from our clean HTML */
-        var frag = document.createRange().createContextualFragment(cleanHTML);
-
+        var frag = document.createRange().createContextualFragment(cleanTableHTML);
         if (insertTarget && insertTarget.parentElement === quill.root) {
-          /* Insert after the current block element */
           insertTarget.parentElement.insertBefore(frag, insertTarget.nextSibling);
         } else {
-          /* Append at end */
           quill.root.appendChild(frag);
         }
 
-        /* Strip any existing resize handles before capturing HTML */
-        quill.root.querySelectorAll('.tbl-col-resize-handle, .tbl-row-resize-handle').forEach(function(h) { h.remove(); });
-
-        /* Capture the full correct HTML while Quill is frozen */
-        var finalHTML = quill.root.innerHTML;
-
-        /* Re-enable Quill */
+        /* Capture innerHTML while Quill is frozen */
+        var safeHTML = quill.root.innerHTML;
         quill.enable();
 
-        /* Force-set the correct HTML, bypassing Quill's model reconciliation */
-        quill.root.innerHTML = finalHTML;
-        try { quill.update('silent'); } catch(err) { /* table displays even if Quill state sync fails */ }
+        /* Reload via loadNoteHTML — same path that execTableAction uses */
+        loadNoteHTML(safeHTML, true);
 
-        /* Make cells editable + add resize handles */
-        makeTableCellsEditable();
-        addResizeHandles();
-
-        /* Trigger save */
-        if (typeof scheduleSave === 'function') scheduleSave({}, {}, 'user');
+        /* Force save */
+        if (saveTimer) clearTimeout(saveTimer);
+        saveCurrentNote();
       }, true); /* capture phase — runs before Quill's clipboard */
 
       /* ── Enter key inside table cells → native line break ──
@@ -2394,10 +2380,7 @@
         var rows = Array.from(table.querySelectorAll('tr'));
         var data = rows.map(function(r) {
           return Array.from(r.children).map(function(c) {
-            /* Clone cell and strip resize handles before extracting content */
-            var clone = c.cloneNode(true);
-            clone.querySelectorAll('.tbl-col-resize-handle, .tbl-row-resize-handle').forEach(function(h) { h.remove(); });
-            return clone.innerHTML;
+            return c.innerHTML;
           });
         });
         return { data: data, hasHeader: hasHeader };
@@ -2543,7 +2526,6 @@
           var tables = quill.root.querySelectorAll('table');
           if (!tables.length) { hideFloatBar(); return; }
           makeTableCellsEditable();
-          addResizeHandles();
           /* Find the right table (closest to original position) */
           var tbl = tables[tables.length - 1]; /* fallback to last */
           for (var ti = 0; ti < tables.length; ti++) {
@@ -2740,196 +2722,184 @@
       quill.root.addEventListener('touchmove', function() { clearTimeout(longPressTimer); }, {passive:true});
 
       /* ═══════════════════════════════════════════════════════════════
-         ██  Column & Row Resize Handles
+         ██  Column & Row Resize — Border Detection Approach
          ═══════════════════════════════════════════════════════════════
-         Adds invisible drag handles on the right edge of each cell (for
-         column resizing) and bottom edge of cells in the last row per
-         column (for row resizing). Handles mouse + touch.               */
+         Instead of invisible handle elements (which are impossible to
+         target inside contenteditable cells), we detect when the cursor
+         is near a cell border and start resize from there.
+         Works with both mouse and touch.                                */
 
-      function addResizeHandles() {
-        /* Remove existing handles first */
-        quill.root.querySelectorAll('.tbl-col-resize-handle, .tbl-row-resize-handle').forEach(function(h) { h.remove(); });
+      var resizeState = null;
+      var EDGE_THRESHOLD = 8; /* px from border to trigger resize */
 
-        quill.root.querySelectorAll('table').forEach(function(table) {
-          var rows = table.querySelectorAll('tr');
-          rows.forEach(function(row, rowIdx) {
-            var cells = row.querySelectorAll('td, th');
-            cells.forEach(function(cell, colIdx) {
-              /* position:relative is already set in CSS for td/th */
+      /* Visual indicator line during resize */
+      var resizeLine = document.createElement('div');
+      resizeLine.className = 'tbl-resize-line';
+      resizeLine.style.display = 'none';
+      document.body.appendChild(resizeLine);
 
-              /* Column resize handle on right edge of every cell (except last column) */
-              if (colIdx < cells.length - 1) {
-                var colHandle = document.createElement('div');
-                colHandle.className = 'tbl-col-resize-handle';
-                colHandle.setAttribute('data-col', colIdx);
-                colHandle.setAttribute('contenteditable', 'false');
-                cell.appendChild(colHandle);
-              }
+      /* Detect which border edge the pointer is near */
+      function detectEdge(cell, x, y) {
+        var rect = cell.getBoundingClientRect();
+        var row = cell.closest('tr');
+        var table = cell.closest('table');
+        if (!row || !table) return null;
+        var cells = Array.from(row.querySelectorAll('td, th'));
+        var colIdx = cells.indexOf(cell);
+        var rows = Array.from(table.querySelectorAll('tr'));
+        var rowIdx = rows.indexOf(row);
 
-              /* Row resize handle on bottom edge of every cell (except last row) */
-              if (rowIdx < rows.length - 1) {
-                var rowHandle = document.createElement('div');
-                rowHandle.className = 'tbl-row-resize-handle';
-                rowHandle.setAttribute('data-row', rowIdx);
-                rowHandle.setAttribute('contenteditable', 'false');
-                cell.appendChild(rowHandle);
-              }
-            });
-          });
-        });
+        /* Check right edge (column resize) — not for last column */
+        if (colIdx < cells.length - 1 && Math.abs(rect.right - x) < EDGE_THRESHOLD) {
+          return { type: 'col', colIdx: colIdx, table: table };
+        }
+        /* Check left edge (column resize) — treat as resizing the column to the left */
+        if (colIdx > 0 && Math.abs(rect.left - x) < EDGE_THRESHOLD) {
+          return { type: 'col', colIdx: colIdx - 1, table: table };
+        }
+        /* Check bottom edge (row resize) — not for last row */
+        if (rowIdx < rows.length - 1 && Math.abs(rect.bottom - y) < EDGE_THRESHOLD) {
+          return { type: 'row', rowIdx: rowIdx, table: table };
+        }
+        /* Check top edge (row resize) — treat as resizing row above */
+        if (rowIdx > 0 && Math.abs(rect.top - y) < EDGE_THRESHOLD) {
+          return { type: 'row', rowIdx: rowIdx - 1, table: table };
+        }
+        return null;
       }
 
-      /* ── Resize state ── */
-      var resizeState = null;
-
-      function startResize(type, table, index, startPos) {
+      function startResize(edge, x, y) {
+        var table = edge.table;
         table.classList.add('tbl-resizing');
 
-        if (type === 'col') {
-          /* Switch table to explicit pixel widths so we can resize individual columns */
+        if (edge.type === 'col') {
           var firstRow = table.querySelector('tr');
           if (!firstRow) return;
           var firstCells = firstRow.querySelectorAll('td, th');
           var colWidths = [];
           firstCells.forEach(function(c) { colWidths.push(c.getBoundingClientRect().width); });
-          /* Set explicit widths on all cells in each column */
-          var allRows = table.querySelectorAll('tr');
-          allRows.forEach(function(r) {
+          /* Set explicit pixel widths on all cells */
+          table.querySelectorAll('tr').forEach(function(r) {
             var cs = r.querySelectorAll('td, th');
             cs.forEach(function(c, i) {
               if (i < colWidths.length) c.style.width = colWidths[i] + 'px';
             });
           });
           table.style.tableLayout = 'fixed';
-
-          resizeState = {
-            type: 'col', table: table, index: index,
-            startX: startPos, colWidths: colWidths
-          };
+          resizeState = { type: 'col', table: table, index: edge.colIdx,
+                          startX: x, colWidths: colWidths };
+          /* Show vertical guide line */
+          var tRect = table.getBoundingClientRect();
+          resizeLine.className = 'tbl-resize-line col';
+          resizeLine.style.display = 'block';
+          resizeLine.style.left = x + 'px';
+          resizeLine.style.top = tRect.top + 'px';
+          resizeLine.style.height = tRect.height + 'px';
         } else {
-          /* Row resize */
-          var targetRow = table.querySelectorAll('tr')[index];
+          var targetRow = table.querySelectorAll('tr')[edge.rowIdx];
           if (!targetRow) return;
-          var startHeight = targetRow.getBoundingClientRect().height;
-          resizeState = {
-            type: 'row', table: table, index: index,
-            startY: startPos, startHeight: startHeight, row: targetRow
-          };
+          resizeState = { type: 'row', table: table, index: edge.rowIdx,
+                          startY: y, startHeight: targetRow.getBoundingClientRect().height,
+                          row: targetRow };
+          /* Show horizontal guide line */
+          var tRect2 = table.getBoundingClientRect();
+          resizeLine.className = 'tbl-resize-line row';
+          resizeLine.style.display = 'block';
+          resizeLine.style.left = tRect2.left + 'px';
+          resizeLine.style.top = y + 'px';
+          resizeLine.style.width = tRect2.width + 'px';
         }
       }
 
-      function doResize(currentPos) {
+      function doResize(x, y) {
         if (!resizeState) return;
         if (resizeState.type === 'col') {
-          var delta = currentPos - resizeState.startX;
+          var delta = x - resizeState.startX;
           var idx = resizeState.index;
-          var newWidthL = Math.max(40, resizeState.colWidths[idx] + delta);
-          var newWidthR = Math.max(40, resizeState.colWidths[idx + 1] - delta);
-          /* Apply to all rows */
-          var allRows = resizeState.table.querySelectorAll('tr');
-          allRows.forEach(function(r) {
+          var newWL = Math.max(40, resizeState.colWidths[idx] + delta);
+          var newWR = Math.max(40, resizeState.colWidths[idx + 1] - delta);
+          resizeState.table.querySelectorAll('tr').forEach(function(r) {
             var cs = r.querySelectorAll('td, th');
-            if (cs[idx]) cs[idx].style.width = newWidthL + 'px';
-            if (cs[idx + 1]) cs[idx + 1].style.width = newWidthR + 'px';
+            if (cs[idx]) cs[idx].style.width = newWL + 'px';
+            if (cs[idx + 1]) cs[idx + 1].style.width = newWR + 'px';
           });
+          resizeLine.style.left = x + 'px';
         } else {
-          var delta2 = currentPos - resizeState.startY;
-          var newH = Math.max(24, resizeState.startHeight + delta2);
-          /* Set min-height on all cells in this row */
-          var cells = resizeState.row.querySelectorAll('td, th');
-          cells.forEach(function(c) { c.style.minHeight = newH + 'px'; c.style.height = newH + 'px'; });
+          var deltaY = y - resizeState.startY;
+          var newH = Math.max(24, resizeState.startHeight + deltaY);
+          resizeState.row.querySelectorAll('td, th').forEach(function(c) {
+            c.style.height = newH + 'px';
+          });
+          resizeLine.style.top = y + 'px';
         }
       }
 
       function endResize() {
         if (!resizeState) return;
         resizeState.table.classList.remove('tbl-resizing');
+        resizeLine.style.display = 'none';
         resizeState = null;
-        /* Strip resize handles before capturing HTML */
-        quill.root.querySelectorAll('.tbl-col-resize-handle, .tbl-row-resize-handle').forEach(function(h) { h.remove(); });
-        /* Save after resize */
-        quill.disable();
-        var safeHTML = quill.root.innerHTML;
-        quill.enable();
-        quill.root.innerHTML = safeHTML;
-        try { quill.update('silent'); } catch(err) {}
-        makeTableCellsEditable();
-        addResizeHandles();
+        /* Persist the resize by saving */
         if (typeof scheduleSave === 'function') scheduleSave({}, {}, 'user');
       }
 
-      /* ── Mouse event delegation ── */
-      quill.root.addEventListener('mousedown', function(e) {
-        var colH = e.target.closest('.tbl-col-resize-handle');
-        var rowH = e.target.closest('.tbl-row-resize-handle');
-        if (!colH && !rowH) return;
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        var table = e.target.closest('table');
-        if (!table) return;
-        if (colH) {
-          colH.classList.add('active');
-          startResize('col', table, parseInt(colH.getAttribute('data-col')), e.clientX);
+      /* ── Cursor hint: change cursor when near a cell border ── */
+      quill.root.addEventListener('mousemove', function(e) {
+        if (resizeState) return; /* don't change cursor during drag */
+        var cell = e.target.closest ? e.target.closest('td, th') : null;
+        if (!cell) { quill.root.style.cursor = ''; return; }
+        var edge = detectEdge(cell, e.clientX, e.clientY);
+        if (edge) {
+          cell.style.cursor = edge.type === 'col' ? 'col-resize' : 'row-resize';
         } else {
-          rowH.classList.add('active');
-          startResize('row', table, parseInt(rowH.getAttribute('data-row')), e.clientY);
+          cell.style.cursor = '';
         }
       });
 
+      /* ── Mouse: start resize on mousedown near border ── */
+      quill.root.addEventListener('mousedown', function(e) {
+        var cell = e.target.closest ? e.target.closest('td, th') : null;
+        if (!cell) return;
+        var edge = detectEdge(cell, e.clientX, e.clientY);
+        if (!edge) return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        startResize(edge, e.clientX, e.clientY);
+      });
       document.addEventListener('mousemove', function(e) {
         if (!resizeState) return;
         e.preventDefault();
-        doResize(resizeState.type === 'col' ? e.clientX : e.clientY);
+        doResize(e.clientX, e.clientY);
       });
-
       document.addEventListener('mouseup', function() {
-        if (resizeState) {
-          quill.root.querySelectorAll('.tbl-col-resize-handle.active, .tbl-row-resize-handle.active').forEach(function(h) { h.classList.remove('active'); });
-          endResize();
-        }
+        if (resizeState) endResize();
       });
 
-      /* ── Touch event delegation ── */
+      /* ── Touch: start resize on touchstart near border ── */
       quill.root.addEventListener('touchstart', function(e) {
-        var touch = e.touches[0];
-        var el = document.elementFromPoint(touch.clientX, touch.clientY);
-        if (!el) return;
-        var colH = el.closest('.tbl-col-resize-handle');
-        var rowH = el.closest('.tbl-row-resize-handle');
-        if (!colH && !rowH) return;
+        if (e.touches.length !== 1) return;
+        var t = e.touches[0];
+        var el = document.elementFromPoint(t.clientX, t.clientY);
+        var cell = el ? (el.closest ? el.closest('td, th') : null) : null;
+        if (!cell) return;
+        var edge = detectEdge(cell, t.clientX, t.clientY);
+        if (!edge) return;
         e.preventDefault();
         e.stopImmediatePropagation();
-        var table = el.closest('table');
-        if (!table) return;
-        if (colH) {
-          colH.classList.add('active');
-          startResize('col', table, parseInt(colH.getAttribute('data-col')), touch.clientX);
-        } else {
-          rowH.classList.add('active');
-          startResize('row', table, parseInt(rowH.getAttribute('data-row')), touch.clientY);
-        }
+        startResize(edge, t.clientX, t.clientY);
       }, {passive: false});
-
       document.addEventListener('touchmove', function(e) {
         if (!resizeState) return;
         e.preventDefault();
-        var touch = e.touches[0];
-        doResize(resizeState.type === 'col' ? touch.clientX : touch.clientY);
+        var t = e.touches[0];
+        doResize(t.clientX, t.clientY);
       }, {passive: false});
-
       document.addEventListener('touchend', function() {
-        if (resizeState) {
-          quill.root.querySelectorAll('.tbl-col-resize-handle.active, .tbl-row-resize-handle.active').forEach(function(h) { h.classList.remove('active'); });
-          endResize();
-        }
+        if (resizeState) endResize();
       });
-
-      /* Add handles to any existing tables on page load */
-      setTimeout(addResizeHandles, 200);
 
       /* Expose to global scope so loadNoteHTML can call these */
       window._tblMakeCellsEditable = makeTableCellsEditable;
-      window._tblAddResizeHandles = addResizeHandles;
 
     })();
 
@@ -4161,7 +4131,6 @@
           var tableCells = quill.root.querySelectorAll('table td:not([contenteditable]), table th:not([contenteditable])');
           tableCells.forEach(function(c) { c.setAttribute('contenteditable', 'true'); });
         }
-        if (window._tblAddResizeHandles) window._tblAddResizeHandles();
       }, 50);
     }
 
@@ -4195,14 +4164,7 @@
       saveTimer=null; /* reset so onSnapshot sync check works */
       if(!S.currentNoteId||!store) return;
       const title=$('#note-title').value.trim()||'Untitled Note';
-      /* Strip UI-only elements (resize handles) before saving */
-      var contentTmp = document.createElement('div');
-      contentTmp.innerHTML = quill.root.innerHTML;
-      contentTmp.querySelectorAll('.tbl-col-resize-handle, .tbl-row-resize-handle').forEach(function(h) { h.remove(); });
-      /* Remove tbl-active-cell class and tbl-resizing class */
-      contentTmp.querySelectorAll('.tbl-active-cell').forEach(function(c) { c.classList.remove('tbl-active-cell'); });
-      contentTmp.querySelectorAll('.tbl-resizing').forEach(function(t) { t.classList.remove('tbl-resizing'); });
-      const content = contentTmp.innerHTML;
+      const content=quill.root.innerHTML;
       /* ── CRITICAL: set lastLoadedContent BEFORE the await ──
          Without this, onSnapshot fires during await, sees
          serverHTML !== lastLoadedContent (still old), calls
