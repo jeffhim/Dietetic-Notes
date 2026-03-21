@@ -2302,7 +2302,11 @@
 
         var cleanTableHTML = allTableHTMLs.join('') + '<p><br></p>';
 
-        /* ── Insert using the same proven path as execTableAction ── */
+        /* ── Insert DIRECTLY into the DOM, completely bypassing clipboard.convert ──
+           clipboard.convert() mangles table HTML (even clean buildTableHTML output).
+           Instead: disable Quill → DOM insert → capture innerHTML → enable Quill →
+           set innerHTML directly → update('silent'). This is the same fallback path
+           that loadNoteHTML uses for images, and it preserves table structure. */
         quill.disable();
 
         /* Insert the table HTML at cursor position in DOM */
@@ -2325,16 +2329,31 @@
           quill.root.appendChild(frag);
         }
 
-        /* Capture innerHTML while Quill is frozen */
+        /* Capture correct innerHTML while Quill is frozen */
         var safeHTML = quill.root.innerHTML;
         quill.enable();
 
-        /* Reload via loadNoteHTML — same path that execTableAction uses */
-        loadNoteHTML(safeHTML, true);
+        /* Force-set innerHTML directly — do NOT go through loadNoteHTML/clipboard.convert
+           which would mangle the table. This is the same approach as the image fallback. */
+        quill.root.innerHTML = safeHTML;
+        try { quill.update('silent'); } catch(err) { /* ignore */ }
+
+        /* Verify quill.update didn't mangle our table — re-set if it did */
+        var cellsBefore = (safeHTML.match(/<t[dh][\s>]/gi) || []).length;
+        var cellsAfter = quill.root.querySelectorAll('td, th').length;
+        if (cellsAfter < cellsBefore) {
+          quill.root.innerHTML = safeHTML;
+        }
+
+        /* Update lastLoadedContent so onSnapshot won't re-trigger a load */
+        if (typeof lastLoadedContent !== 'undefined') lastLoadedContent = quill.root.innerHTML;
+
+        /* Make cells editable */
+        makeTableCellsEditable();
 
         /* Force save */
-        if (saveTimer) clearTimeout(saveTimer);
-        saveCurrentNote();
+        if (typeof saveTimer !== 'undefined' && saveTimer) clearTimeout(saveTimer);
+        if (typeof saveCurrentNote === 'function') saveCurrentNote();
       }, true); /* capture phase — runs before Quill's clipboard */
 
       /* ── Enter key inside table cells → native line break ──
@@ -2429,7 +2448,9 @@
           table.remove();
           var dhtml = quill.root.innerHTML;
           quill.enable();
-          loadNoteHTML(dhtml, true);
+          quill.root.innerHTML = dhtml;
+          try { quill.update('silent'); } catch(err) {}
+          if (typeof lastLoadedContent !== 'undefined') lastLoadedContent = quill.root.innerHTML;
           if (saveTimer) clearTimeout(saveTimer);
           saveCurrentNote();
           hideFloatBar();
@@ -2512,10 +2533,16 @@
         /* Capture the CORRECT full editor HTML while Quill is frozen */
         var safeHTML = quill.root.innerHTML;
 
-        /* Re-enable Quill, then force-load the correct HTML via the
-           proven loadNoteHTML path (same one used to open notes) */
+        /* Re-enable Quill — bypass clipboard.convert entirely by setting innerHTML
+           directly. clipboard.convert can mangle table structure. */
         quill.enable();
-        loadNoteHTML(safeHTML, true);
+        quill.root.innerHTML = safeHTML;
+        try { quill.update('silent'); } catch(err) {}
+        /* Verify update didn't mangle — re-set if needed */
+        var expectedCells = (safeHTML.match(/<t[dh][\s>]/gi) || []).length;
+        var gotCells = quill.root.querySelectorAll('td, th').length;
+        if (gotCells < expectedCells) quill.root.innerHTML = safeHTML;
+        if (typeof lastLoadedContent !== 'undefined') lastLoadedContent = quill.root.innerHTML;
 
         /* Save */
         if (saveTimer) clearTimeout(saveTimer);
@@ -4083,8 +4110,9 @@
       lastLoadedContent = html || '';
       if (!html) { quill.setContents([{insert:'\n'}], 'silent'); if (!keepHistory) quill.getModule('history').clear(); return; }
 
-      /* Count expected images so we can verify later */
+      /* Count expected images and table cells so we can verify later */
       var expectedImgs = (html.match(/<img\s/gi) || []).length;
+      var expectedCells = (html.match(/<t[dh][\s>]/gi) || []).length;
 
       /* 1. Parse HTML and swap long image srcs with short data:-protocol placeholders
             (must be data: protocol so Quill's Image.sanitize() doesn't strip them) */
@@ -4114,11 +4142,20 @@
       /* 4. Apply to editor */
       quill.setContents(delta, 'silent');
 
-      /* 5. Verify images survived conversion — fallback to innerHTML if any were lost */
+      /* 5. Verify images AND tables survived conversion — fallback to innerHTML if any were lost.
+            clipboard.convert() is known to mangle complex table HTML (splitting cells, dropping
+            content). We compare cell counts before/after and fall back to direct innerHTML. */
       var actualImgs = quill.root.querySelectorAll('img').length;
-      if (actualImgs < expectedImgs) {
+      var actualCells = quill.root.querySelectorAll('td, th').length;
+      if (actualImgs < expectedImgs || actualCells < expectedCells) {
         quill.root.innerHTML = html;
-        try { quill.update('silent'); } catch(e) { /* images display even if Quill state sync fails */ }
+        try { quill.update('silent'); } catch(e) { /* content displays even if Quill state sync fails */ }
+        /* Verify update('silent') didn't re-mangle the table — force innerHTML again if needed */
+        var cellsAfterUpdate = quill.root.querySelectorAll('td, th').length;
+        if (cellsAfterUpdate < expectedCells) {
+          quill.root.innerHTML = html;
+          /* Skip update entirely — Quill model will be out of sync but content displays correctly */
+        }
       }
 
       if (!keepHistory) quill.getModule('history').clear();
