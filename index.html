@@ -471,7 +471,18 @@
     .tbl-fb-btn span { font-size:9px; line-height:1; }
     .tbl-fb-danger i { color:#EF4444; }
     .tbl-fb-danger:hover, .tbl-fb-danger:active { background:#FEE2E2; }
+    .tbl-fb-align { min-width:28px; padding:6px 5px; }
+    .tbl-fb-align i { color:#64748B; font-size:12px; }
+    .tbl-fb-align:hover i, .tbl-fb-align:active i { color:#14B8A6; }
+    .tbl-fb-align.active { background:#E0FBF6; }
+    .tbl-fb-align.active i { color:#14B8A6; }
     .tbl-fb-sep { width:1px; height:28px; background:#CBD5E1; margin:0 2px; flex-shrink:0; }
+    html.dark .tbl-float-bar { background:#1E293B; border-color:#334155; box-shadow:0 4px 20px rgba(0,0,0,0.35); }
+    html.dark .tbl-fb-btn { color:#94A3B8; }
+    html.dark .tbl-fb-btn:hover, html.dark .tbl-fb-btn:active { background:#334155; }
+    html.dark .tbl-fb-sep { background:#334155; }
+    html.dark .tbl-fb-align.active { background:#0D2D2A; }
+    html.dark .tbl-fb-danger:hover, html.dark .tbl-fb-danger:active { background:#3B1A1A; }
     /* Highlight active cell in table */
     .ql-editor table td.tbl-active-cell, .ql-editor table th.tbl-active-cell { outline:2px solid #2DD4BF; outline-offset:-2px; background:rgba(45,212,191,0.08); }
 
@@ -652,6 +663,10 @@
     <button class="tbl-fb-btn" data-action="addColLeft" title="Insert column left"><i class="fas fa-arrow-left"></i><span>Col</span></button>
     <button class="tbl-fb-btn" data-action="addColRight" title="Insert column right"><i class="fas fa-arrow-right"></i><span>Col</span></button>
     <div class="tbl-fb-sep"></div>
+    <button class="tbl-fb-btn tbl-fb-align" data-action="alignLeft" title="Align left"><i class="fas fa-align-left"></i></button>
+    <button class="tbl-fb-btn tbl-fb-align" data-action="alignCenter" title="Align center"><i class="fas fa-align-center"></i></button>
+    <button class="tbl-fb-btn tbl-fb-align" data-action="alignRight" title="Align right"><i class="fas fa-align-right"></i></button>
+    <div class="tbl-fb-sep"></div>
     <button class="tbl-fb-btn tbl-fb-danger" data-action="deleteRow" title="Delete row"><i class="fas fa-minus"></i><span>Row</span></button>
     <button class="tbl-fb-btn tbl-fb-danger" data-action="deleteCol" title="Delete column"><i class="fas fa-columns"></i><span>Col</span></button>
     <button class="tbl-fb-btn tbl-fb-danger" data-action="deleteTable" title="Delete table"><i class="fas fa-trash"></i></button>
@@ -665,6 +680,10 @@
     <div class="tbl-ctx-item" data-action="addColRight"><i class="fas fa-arrow-right"></i>Insert column right</div>
     <div class="tbl-ctx-sep"></div>
     <div class="tbl-ctx-item" data-action="toggleHeader"><i class="fas fa-heading"></i>Toggle header row</div>
+    <div class="tbl-ctx-sep"></div>
+    <div class="tbl-ctx-item" data-action="alignLeft"><i class="fas fa-align-left"></i>Align left</div>
+    <div class="tbl-ctx-item" data-action="alignCenter"><i class="fas fa-align-center"></i>Align center</div>
+    <div class="tbl-ctx-item" data-action="alignRight"><i class="fas fa-align-right"></i>Align right</div>
     <div class="tbl-ctx-sep"></div>
     <div class="tbl-ctx-item danger" data-action="deleteRow"><i class="fas fa-minus"></i>Delete row</div>
     <div class="tbl-ctx-item danger" data-action="deleteCol"><i class="fas fa-columns"></i>Delete column</div>
@@ -2224,6 +2243,39 @@
          FALLBACK: also check text/html for <table> tags.
 
          We completely bypass Quill's clipboard.convert by setting innerHTML directly. */
+      /* Helper: detect column count from HTML structure (for OneNote etc. that
+         don't use \n between rows in text/plain but have structural HTML) */
+      function detectColsFromHTML(htmlStr) {
+        if (!htmlStr) return 0;
+        var tmp = document.createElement('div');
+        tmp.innerHTML = htmlStr;
+        /* Method 1: ARIA table roles */
+        var ariaRows = tmp.querySelectorAll('[role="row"]');
+        if (ariaRows.length > 1) {
+          var ariaCells = ariaRows[0].querySelectorAll('[role="cell"], [role="gridcell"]');
+          if (ariaCells.length >= 2) return ariaCells.length;
+        }
+        /* Method 2: Actual <table> rows */
+        var tables = tmp.querySelectorAll('table');
+        if (tables.length > 0) {
+          var firstTR = tables[0].querySelector('tr');
+          if (firstTR) {
+            var tds = firstTR.querySelectorAll('td, th');
+            if (tds.length >= 2) return tds.length;
+          }
+        }
+        /* Method 3: Repeated top-level block divs containing similar child counts */
+        var topDivs = Array.from(tmp.children).filter(function(el) {
+          return el.tagName === 'DIV' || el.tagName === 'P';
+        });
+        if (topDivs.length > 1) {
+          /* Count "cell-like" children (spans, text nodes) in first block */
+          var firstChildren = topDivs[0].querySelectorAll('span, td, th');
+          if (firstChildren.length >= 2) return firstChildren.length;
+        }
+        return 0;
+      }
+
       quill.root.addEventListener('paste', function(e) {
         var cd = e.clipboardData;
         if (!cd) return;
@@ -2232,45 +2284,13 @@
         var html = cd.getData('text/html') || '';
         var data = null; /* 2D array of cell contents */
 
-        /* ── Strategy 1: Parse tab-delimited text/plain ──
-           This is the most reliable method. OneNote, Excel, Google Sheets all
-           copy tables as tab-delimited text. Check if there are tabs + multiple lines. */
-        if (plainText.indexOf('\t') !== -1) {
-          var lines = plainText.split(/\r?\n/);
-          /* Remove trailing empty line (common with copy) */
-          while (lines.length > 0 && lines[lines.length - 1].trim() === '') lines.pop();
-          if (lines.length >= 1) {
-            var tabData = [];
-            var maxCols = 0;
-            for (var li = 0; li < lines.length; li++) {
-              var cols = lines[li].split('\t');
-              if (cols.length > maxCols) maxCols = cols.length;
-              tabData.push(cols);
-            }
-            /* Only treat as table if we have at least 2 columns */
-            if (maxCols >= 2) {
-              /* Pad short rows */
-              for (var pi = 0; pi < tabData.length; pi++) {
-                while (tabData[pi].length < maxCols) tabData[pi].push('');
-              }
-              /* Escape HTML entities and convert empty cells to <br> */
-              data = tabData.map(function(row) {
-                return row.map(function(cell) {
-                  var escaped = cell.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-                  return escaped.trim() || '<br>';
-                });
-              });
-            }
-          }
-        }
-
-        /* ── Strategy 2: Parse HTML <table> tags (if text/plain didn't work) ── */
-        if (!data && html && html.toLowerCase().indexOf('<table') !== -1) {
+        /* ── Strategy 1: Parse HTML <table> tags (best for row structure) ── */
+        if (html && html.toLowerCase().indexOf('<table') !== -1) {
           var tmp = document.createElement('div');
           tmp.innerHTML = html;
           var pastedTables = tmp.querySelectorAll('table');
           if (pastedTables.length > 0) {
-            var tbl = pastedTables[0]; /* Use first table */
+            var tbl = pastedTables[0];
             var htmlData = [];
             tbl.querySelectorAll('tr').forEach(function(row) {
               var rowData = [];
@@ -2298,6 +2318,70 @@
           }
         }
 
+        /* ── Strategy 2: Parse tab-delimited text/plain ──
+           OneNote, Excel, Google Sheets all copy tables as tab-delimited text.
+           Handle ALL line break types: Windows \r\n, Unix \n, old Mac \r, Unicode separators. */
+        if (!data && plainText.indexOf('\t') !== -1) {
+          var lines = plainText.split(/\r\n|\n|\r|\u2028|\u2029/);
+          /* Remove trailing empty lines (common with copy) */
+          while (lines.length > 0 && lines[lines.length - 1].trim() === '') lines.pop();
+          if (lines.length >= 1) {
+            var tabData = [];
+            var maxCols = 0;
+            for (var li = 0; li < lines.length; li++) {
+              var cols = lines[li].split('\t');
+              if (cols.length > maxCols) maxCols = cols.length;
+              tabData.push(cols);
+            }
+
+            /* If we got 1 row with many columns, the source app may have put
+               ALL cells on a single line with tabs (no row separators).
+               Try to detect the real column count from HTML structure. */
+            if (tabData.length === 1 && maxCols > 2) {
+              var detectedCols = detectColsFromHTML(html);
+              /* Reshape flat array into proper rows if column count makes sense */
+              if (detectedCols >= 2 && maxCols % detectedCols === 0 && maxCols > detectedCols) {
+                var flat = tabData[0];
+                tabData = [];
+                for (var ri = 0; ri < flat.length; ri += detectedCols) {
+                  tabData.push(flat.slice(ri, ri + detectedCols));
+                }
+                maxCols = detectedCols;
+              }
+              /* Last resort: if still 1 row, try smallest divisor >= 2 that
+                 produces at least 2 rows (common case: 2-col table) */
+              if (tabData.length === 1 && maxCols > 3) {
+                for (var tryC = 2; tryC <= Math.min(8, Math.floor(maxCols / 2)); tryC++) {
+                  if (maxCols % tryC === 0) {
+                    var flat2 = tabData[0];
+                    tabData = [];
+                    for (var ri2 = 0; ri2 < flat2.length; ri2 += tryC) {
+                      tabData.push(flat2.slice(ri2, ri2 + tryC));
+                    }
+                    maxCols = tryC;
+                    break;
+                  }
+                }
+              }
+            }
+
+            /* Only treat as table if we have at least 2 columns */
+            if (maxCols >= 2) {
+              /* Pad short rows */
+              for (var pi = 0; pi < tabData.length; pi++) {
+                while (tabData[pi].length < maxCols) tabData[pi].push('');
+              }
+              /* Escape HTML entities and convert empty cells to <br> */
+              data = tabData.map(function(row) {
+                return row.map(function(cell) {
+                  var escaped = cell.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                  return escaped.trim() || '<br>';
+                });
+              });
+            }
+          }
+        }
+
         /* If we didn't detect a table, let Quill handle the paste normally */
         if (!data || data.length === 0) {
           setTimeout(makeTableCellsEditable, 150);
@@ -2309,43 +2393,45 @@
         e.stopPropagation();
         e.stopImmediatePropagation();
 
-        /* Build clean table HTML */
-        var cleanTableHTML = buildTableHTML(data, false) + '<p><br></p>';
-
-        /* Insert directly into DOM, bypassing Quill's clipboard.convert entirely */
-        quill.disable();
-
-        var sel = window.getSelection();
-        var insertTarget = null;
-        if (sel && sel.rangeCount > 0) {
-          var rng = sel.getRangeAt(0);
-          var block = rng.startContainer;
-          if (block.nodeType === 3) block = block.parentElement;
-          while (block && block !== quill.root && block.parentElement !== quill.root) {
-            block = block.parentElement;
+        /* Build clean table HTML WITHOUT contenteditable attr for dangerouslyPasteHTML.
+           Same simple structure as insertTableAtCursor which is proven to work. */
+        var cleanHTML = '<table><tbody>';
+        for (var ti = 0; ti < data.length; ti++) {
+          cleanHTML += '<tr>';
+          for (var tj = 0; tj < data[ti].length; tj++) {
+            cleanHTML += '<td>' + data[ti][tj] + '</td>';
           }
-          insertTarget = block;
+          cleanHTML += '</tr>';
         }
+        cleanHTML += '</tbody></table><p><br></p>';
 
-        var frag = document.createRange().createContextualFragment(cleanTableHTML);
-        if (insertTarget && insertTarget.parentElement === quill.root) {
-          insertTarget.parentElement.insertBefore(frag, insertTarget.nextSibling);
-        } else {
-          quill.root.appendChild(frag);
-        }
+        /* Use dangerouslyPasteHTML with 'user' source — same approach as insertTableAtCursor.
+           This gives us proper undo/redo support for free via Quill's history module. */
+        var cellsBefore = quill.root.querySelectorAll('td, th').length;
+        var range = quill.getSelection(true);
+        var idx = range ? range.index : quill.getLength() - 1;
 
-        var safeHTML = quill.root.innerHTML;
-        quill.enable();
+        try {
+          quill.clipboard.dangerouslyPasteHTML(idx, cleanHTML, 'user');
+        } catch(pasteErr) { /* handled by verification below */ }
 
-        /* Force-set innerHTML — completely bypass clipboard.convert */
-        quill.root.innerHTML = safeHTML;
-        try { quill.update('silent'); } catch(err) {}
-
-        /* Verify update didn't mangle — re-set if needed */
-        var cellsBefore = (safeHTML.match(/<t[dh][\s>]/gi) || []).length;
+        /* Verify cells survived dangerouslyPasteHTML */
+        var expectedNew = 0;
+        for (var vc = 0; vc < data.length; vc++) expectedNew += data[vc].length;
         var cellsAfter = quill.root.querySelectorAll('td, th').length;
-        if (cellsAfter < cellsBefore) {
+
+        if (cellsAfter < cellsBefore + Math.floor(expectedNew * 0.5)) {
+          /* dangerouslyPasteHTML mangled the table — fall back to direct innerHTML */
+          var fullClean = buildTableHTML(data, false) + '<p><br></p>';
+          quill.disable();
+          var frag = document.createRange().createContextualFragment(fullClean);
+          quill.root.appendChild(frag);
+          var safeHTML = quill.root.innerHTML;
+          quill.enable();
           quill.root.innerHTML = safeHTML;
+          try { quill.update('silent'); } catch(updErr) {}
+          var cellsCheck = quill.root.querySelectorAll('td, th').length;
+          if (cellsCheck < (cellsBefore + expectedNew)) quill.root.innerHTML = safeHTML;
         }
 
         if (typeof lastLoadedContent !== 'undefined') lastLoadedContent = quill.root.innerHTML;
@@ -2398,12 +2484,15 @@
         var rows = Array.from(table.querySelectorAll('tr'));
         var data = rows.map(function(r) {
           return Array.from(r.children).map(function(c) {
-            return c.innerHTML;
+            return { html: c.innerHTML, align: c.style.textAlign || '' };
           });
         });
         return { data: data, hasHeader: hasHeader };
       }
 
+      /* Build table HTML from data array. Each cell can be:
+         - a string (just content, e.g. '<br>')
+         - an object { html, align } (content + text-align style) */
       function buildTableHTML(data, hasHeader) {
         var html = '<table>';
         for (var i = 0; i < data.length; i++) {
@@ -2413,7 +2502,17 @@
           html += '<tr>';
           for (var j = 0; j < data[i].length; j++) {
             var tag = (hasHeader && i === 0) ? 'th' : 'td';
-            html += '<' + tag + ' contenteditable="true">' + data[i][j] + '</' + tag + '>';
+            var cellData = data[i][j];
+            var content, align;
+            if (typeof cellData === 'object' && cellData !== null) {
+              content = cellData.html;
+              align = cellData.align || '';
+            } else {
+              content = cellData;
+              align = '';
+            }
+            var styleAttr = (align && align !== 'left') ? ' style="text-align:' + align + '"' : '';
+            html += '<' + tag + ' contenteditable="true"' + styleAttr + '>' + content + '</' + tag + '>';
           }
           html += '</tr>';
           if (hasHeader && i === 0) html += '</thead>';
@@ -2440,6 +2539,22 @@
         var rowIndex = allRows.indexOf(row);
         var cellIndex = Array.from(row.children).indexOf(ctxTargetCell);
         if (cellIndex < 0) cellIndex = 0;
+
+        /* Cell alignment — simple in-place style change, no rebuild needed */
+        if (action === 'alignLeft' || action === 'alignCenter' || action === 'alignRight') {
+          var alignVal = action === 'alignLeft' ? 'left' : (action === 'alignCenter' ? 'center' : 'right');
+          ctxTargetCell.style.textAlign = alignVal;
+          /* Update alignment button states */
+          if (floatBar) {
+            floatBar.querySelectorAll('.tbl-fb-align').forEach(function(btn) {
+              var btnAlign = btn.dataset.action.replace('align', '').toLowerCase();
+              btn.classList.toggle('active', btnAlign === alignVal);
+            });
+          }
+          if (saveTimer) clearTimeout(saveTimer);
+          saveCurrentNote();
+          return;
+        }
 
         /* Delete table — simple case */
         if (action === 'deleteTable') {
@@ -2468,14 +2583,14 @@
         }
         /* Pad any short rows to match the widest row */
         for (var pr = 0; pr < data.length; pr++) {
-          while (data[pr].length < colCount) data[pr].push('<br>');
+          while (data[pr].length < colCount) data[pr].push({ html: '<br>', align: '' });
         }
 
         /* Modify the data array */
         switch (action) {
           case 'addRowAbove':
             var emptyRow = [];
-            for (var a = 0; a < colCount; a++) emptyRow.push('<br>');
+            for (var a = 0; a < colCount; a++) emptyRow.push({ html: '<br>', align: '' });
             if (hasHeader && rowIndex === 0) {
               data.splice(1, 0, emptyRow);
             } else {
@@ -2485,17 +2600,17 @@
             break;
           case 'addRowBelow':
             var emptyRowB = [];
-            for (var b = 0; b < colCount; b++) emptyRowB.push('<br>');
+            for (var b = 0; b < colCount; b++) emptyRowB.push({ html: '<br>', align: '' });
             data.splice(rowIndex + 1, 0, emptyRowB);
             break;
           case 'addColLeft':
             for (var cl = 0; cl < data.length; cl++) {
-              data[cl].splice(cellIndex, 0, '<br>');
+              data[cl].splice(cellIndex, 0, { html: '<br>', align: '' });
             }
             break;
           case 'addColRight':
             for (var cr = 0; cr < data.length; cr++) {
-              data[cr].splice(cellIndex + 1, 0, '<br>');
+              data[cr].splice(cellIndex + 1, 0, { html: '<br>', align: '' });
             }
             break;
           case 'deleteRow':
@@ -2583,7 +2698,7 @@
         if (!cell || !cell.closest('table')) { hideFloatBar(); return; }
         var table = cell.closest('table');
         var tableRect = table.getBoundingClientRect();
-        var barW = 340; /* approx width */
+        var barW = 460; /* approx width (includes alignment buttons) */
         /* Position above the table, centered */
         var left = tableRect.left + (tableRect.width - barW) / 2;
         var top = tableRect.top - 48;
@@ -2611,6 +2726,16 @@
         /* Highlight active cell */
         quill.root.querySelectorAll('.tbl-active-cell').forEach(function(c) { c.classList.remove('tbl-active-cell'); });
         cell.classList.add('tbl-active-cell');
+        /* Update alignment button active states */
+        if (floatBar) {
+          var curAlign = (cell.style.textAlign || 'left').toLowerCase();
+          if (curAlign === '' || curAlign === 'start') curAlign = 'left';
+          if (curAlign === 'end') curAlign = 'right';
+          floatBar.querySelectorAll('.tbl-fb-align').forEach(function(btn) {
+            var btnAlign = btn.dataset.action.replace('align', '').toLowerCase();
+            btn.classList.toggle('active', btnAlign === curAlign);
+          });
+        }
         positionFloatBar(cell);
       }
 
