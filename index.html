@@ -490,9 +490,7 @@
     /* Row / column selection highlighting */
     .ql-editor table td.tbl-sel, .ql-editor table th.tbl-sel { background:rgba(45,212,191,0.15) !important; outline:2px solid rgba(45,212,191,0.5); outline-offset:-2px; }
     html.dark .ql-editor table td.tbl-sel, html.dark .ql-editor table th.tbl-sel { background:rgba(45,212,191,0.12) !important; outline-color:rgba(45,212,191,0.4); }
-    /* Row/col select handles: thin strip on left edge (row) and top edge (col) */
-    .ql-editor table td:first-child::before, .ql-editor table th:first-child::before { content:''; position:absolute; left:0; top:0; width:6px; height:100%; cursor:pointer; z-index:2; }
-    .ql-editor table tr:first-child td::after, .ql-editor table tr:first-child th::after, .ql-editor table thead tr:first-child th::after { content:''; position:absolute; left:0; top:0; width:100%; height:6px; cursor:pointer; z-index:2; }
+    /* Row/col select hints: subtle left/top border highlight on hover for first cells */
     /* Highlight active cell in table */
     .ql-editor table td.tbl-active-cell, .ql-editor table th.tbl-active-cell { outline:2px solid #2DD4BF; outline-offset:-2px; background:rgba(45,212,191,0.08); }
 
@@ -2277,97 +2275,155 @@
         });
       }
 
-      /* ── Intercept pasted tables (e.g. from OneNote, Excel, Google Sheets) ──
-         CRITICAL: OneNote for Web may NOT put <table> tags in clipboard HTML.
-         It often uses <div> elements or other structures. Quill's default paste
-         handler then mangles the content (splitting each character into its own cell).
+      /* ── Intercept ALL pastes to prevent Quill's clipboard.convert from mangling tables.
+         Quill's clipboard.convert butchers ANY table HTML (OneNote, Excel, Google Sheets)
+         by fragmenting content into individual character cells. The ONLY reliable fix is
+         to ALWAYS prevent Quill from handling paste, and do it ourselves:
+         - If table detected → insert clean table via direct innerHTML
+         - If NOT table → use dangerouslyPasteHTML (safe for non-table content) ── */
 
-         PRIMARY approach: parse text/plain for tab-delimited data (all spreadsheet
-         apps and OneNote ALWAYS include this). If we find rows with tabs → it's a table.
-         FALLBACK: also check text/html for <table> tags.
-
-         We completely bypass Quill's clipboard.convert by setting innerHTML directly. */
-      /* Helper: detect column count from HTML structure (for OneNote etc. that
-         don't use \n between rows in text/plain but have structural HTML) */
-      function detectColsFromHTML(htmlStr) {
-        if (!htmlStr) return 0;
+      /* Helper: extract table data from an HTML string.
+         Tries multiple strategies — <table> tags, ARIA roles, <tr>/<td> fragments.
+         Returns 2D array or null. */
+      function extractTableFromHTML(htmlStr) {
+        if (!htmlStr) return null;
         var tmp = document.createElement('div');
         tmp.innerHTML = htmlStr;
-        /* Method 1: ARIA table roles */
-        var ariaRows = tmp.querySelectorAll('[role="row"]');
-        if (ariaRows.length > 1) {
-          var ariaCells = ariaRows[0].querySelectorAll('[role="cell"], [role="gridcell"]');
-          if (ariaCells.length >= 2) return ariaCells.length;
-        }
-        /* Method 2: Actual <table> rows */
-        var tables = tmp.querySelectorAll('table');
-        if (tables.length > 0) {
-          var firstTR = tables[0].querySelector('tr');
-          if (firstTR) {
-            var tds = firstTR.querySelectorAll('td, th');
-            if (tds.length >= 2) return tds.length;
+
+        /* Collect candidate tables — check ALL <table> elements, not just the first.
+           OneNote often wraps a layout table around the real data table. */
+        var allTables = tmp.querySelectorAll('table');
+        var bestData = null;
+        var bestCells = 0;
+        for (var ti = 0; ti < allTables.length; ti++) {
+          var tbl = allTables[ti];
+          var tblData = [];
+          tbl.querySelectorAll('tr').forEach(function(row) {
+            /* Skip rows that are inside a NESTED table (not direct child of this table) */
+            if (row.closest('table') !== tbl) return;
+            var rowData = [];
+            row.querySelectorAll('td, th').forEach(function(cell) {
+              if (cell.closest('table') !== tbl) return;
+              var clone = cell.cloneNode(true);
+              clone.querySelectorAll('table').forEach(function(nt) { nt.remove(); });
+              clone.querySelectorAll('br').forEach(function(br) { br.replaceWith('\n'); });
+              clone.querySelectorAll('p, div, li, h1, h2, h3, h4, h5, h6').forEach(function(b) {
+                b.insertAdjacentText('beforebegin', '\n');
+              });
+              var text = clone.textContent.replace(/\n{3,}/g, '\n\n').trim();
+              var cellHTML = text ? text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>') : '<br>';
+              rowData.push(cellHTML);
+            });
+            if (rowData.length > 0) tblData.push(rowData);
+          });
+          if (tblData.length > 0) {
+            var maxC = 0;
+            tblData.forEach(function(r) { if (r.length > maxC) maxC = r.length; });
+            var totalCells = tblData.length * maxC;
+            /* Pick the table with the MOST cells (the real data table, not a layout wrapper) */
+            if (maxC >= 2 && totalCells > bestCells) {
+              tblData.forEach(function(r) { while (r.length < maxC) r.push('<br>'); });
+              bestData = tblData;
+              bestCells = totalCells;
+            }
           }
         }
-        /* Method 3: Repeated top-level block divs containing similar child counts */
-        var topDivs = Array.from(tmp.children).filter(function(el) {
-          return el.tagName === 'DIV' || el.tagName === 'P';
-        });
-        if (topDivs.length > 1) {
-          /* Count "cell-like" children (spans, text nodes) in first block */
-          var firstChildren = topDivs[0].querySelectorAll('span, td, th');
-          if (firstChildren.length >= 2) return firstChildren.length;
+        if (bestData) return bestData;
+
+        /* Fallback: look for <tr>/<td> elements even without a <table> wrapper */
+        var looseTRs = tmp.querySelectorAll('tr');
+        if (looseTRs.length > 0) {
+          var trData = [];
+          looseTRs.forEach(function(row) {
+            var rowData = [];
+            row.querySelectorAll('td, th').forEach(function(cell) {
+              var text = cell.textContent.trim();
+              var cellHTML = text ? text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') : '<br>';
+              rowData.push(cellHTML);
+            });
+            if (rowData.length > 0) trData.push(rowData);
+          });
+          if (trData.length > 0) {
+            var maxC2 = 0;
+            trData.forEach(function(r) { if (r.length > maxC2) maxC2 = r.length; });
+            if (maxC2 >= 2) {
+              trData.forEach(function(r) { while (r.length < maxC2) r.push('<br>'); });
+              return trData;
+            }
+          }
         }
-        return 0;
+
+        /* Fallback: ARIA table roles */
+        var ariaRows = tmp.querySelectorAll('[role="row"]');
+        if (ariaRows.length >= 2) {
+          var ariaData = [];
+          ariaRows.forEach(function(row) {
+            var rowData = [];
+            row.querySelectorAll('[role="cell"], [role="gridcell"], [role="columnheader"], [role="rowheader"]').forEach(function(cell) {
+              var text = cell.textContent.trim();
+              var cellHTML = text ? text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') : '<br>';
+              rowData.push(cellHTML);
+            });
+            if (rowData.length > 0) ariaData.push(rowData);
+          });
+          if (ariaData.length >= 2) {
+            var maxC3 = 0;
+            ariaData.forEach(function(r) { if (r.length > maxC3) maxC3 = r.length; });
+            if (maxC3 >= 2) {
+              ariaData.forEach(function(r) { while (r.length < maxC3) r.push('<br>'); });
+              return ariaData;
+            }
+          }
+        }
+
+        return null;
       }
 
       quill.root.addEventListener('paste', function(e) {
         var cd = e.clipboardData;
         if (!cd) return;
 
-        var plainText = cd.getData('text/plain') || '';
-        var html = cd.getData('text/html') || '';
-        var data = null; /* 2D array of cell contents */
-
-        /* ── Strategy 1: Parse HTML <table> tags (best for row structure) ── */
-        if (html && html.toLowerCase().indexOf('<table') !== -1) {
-          var tmp = document.createElement('div');
-          tmp.innerHTML = html;
-          var pastedTables = tmp.querySelectorAll('table');
-          if (pastedTables.length > 0) {
-            var tbl = pastedTables[0];
-            var htmlData = [];
-            tbl.querySelectorAll('tr').forEach(function(row) {
-              var rowData = [];
-              row.querySelectorAll('td, th').forEach(function(cell) {
-                var clone = cell.cloneNode(true);
-                clone.querySelectorAll('table').forEach(function(nt) { nt.remove(); });
-                clone.querySelectorAll('br').forEach(function(br) { br.replaceWith('\n'); });
-                clone.querySelectorAll('p, div, li, h1, h2, h3, h4, h5, h6').forEach(function(b) {
-                  b.insertAdjacentText('beforebegin', '\n');
-                });
-                var text = clone.textContent.replace(/\n{3,}/g, '\n\n').trim();
-                var cellHTML = text ? text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>') : '<br>';
-                rowData.push(cellHTML);
-              });
-              if (rowData.length > 0) htmlData.push(rowData);
-            });
-            if (htmlData.length > 0) {
-              var maxC = 0;
-              htmlData.forEach(function(r) { if (r.length > maxC) maxC = r.length; });
-              if (maxC >= 2) {
-                htmlData.forEach(function(r) { while (r.length < maxC) r.push('<br>'); });
-                data = htmlData;
-              }
+        /* ── Image paste — handle FIRST (before table detection) ── */
+        if (cd.items) {
+          for (var ii = 0; ii < cd.items.length; ii++) {
+            if (cd.items[ii].type.indexOf('image') === 0) {
+              e.preventDefault();
+              e.stopImmediatePropagation();
+              var imgFile = cd.items[ii].getAsFile();
+              if (!imgFile) return;
+              (function(f) {
+                var range = quill.getSelection(true);
+                if (typeof compressImage === 'function') {
+                  compressImage(f).then(function(dataUrl) {
+                    quill.insertEmbed(range.index, 'image', dataUrl, 'user');
+                    quill.setSelection(range.index + 1, 0, 'silent');
+                    if (typeof saveTimer !== 'undefined' && saveTimer) clearTimeout(saveTimer);
+                    if (typeof saveCurrentNote === 'function') saveCurrentNote();
+                  }).catch(function(err) {
+                    quill.insertText(range.index, '[Image failed: ' + err.message + ']', {color:'#DC2626'}, 'user');
+                  });
+                }
+              })(imgFile);
+              return;
             }
           }
         }
 
+        var plainText = cd.getData('text/plain') || '';
+        var html = cd.getData('text/html') || '';
+        var data = null; /* 2D array of cell contents */
+
+        /* ── Strategy 1: Parse HTML for table structures ──
+           Check ALL <table> elements (not just first — OneNote may nest layout tables).
+           Also check for ARIA roles and loose <tr>/<td> elements. */
+        if (html) {
+          data = extractTableFromHTML(html);
+        }
+
         /* ── Strategy 2: Parse tab-delimited text/plain ──
-           OneNote, Excel, Google Sheets all copy tables as tab-delimited text.
-           Handle ALL line break types: Windows \r\n, Unix \n, old Mac \r, Unicode separators. */
+           Handle ALL line break types. */
         if (!data && plainText.indexOf('\t') !== -1) {
           var lines = plainText.split(/\r\n|\n|\r|\u2028|\u2029/);
-          /* Remove trailing empty lines (common with copy) */
           while (lines.length > 0 && lines[lines.length - 1].trim() === '') lines.pop();
           if (lines.length >= 1) {
             var tabData = [];
@@ -2377,13 +2433,11 @@
               if (cols.length > maxCols) maxCols = cols.length;
               tabData.push(cols);
             }
-
-            /* If we got 1 row with many columns, the source app may have put
-               ALL cells on a single line with tabs (no row separators).
-               Try to detect the real column count from HTML structure. */
+            /* If 1 row with many columns, try to infer real column count */
             if (tabData.length === 1 && maxCols > 2) {
-              var detectedCols = detectColsFromHTML(html);
-              /* Reshape flat array into proper rows if column count makes sense */
+              /* Try HTML structure for column count hint */
+              var hintData = html ? extractTableFromHTML(html) : null;
+              var detectedCols = (hintData && hintData.length > 0) ? hintData[0].length : 0;
               if (detectedCols >= 2 && maxCols % detectedCols === 0 && maxCols > detectedCols) {
                 var flat = tabData[0];
                 tabData = [];
@@ -2392,8 +2446,7 @@
                 }
                 maxCols = detectedCols;
               }
-              /* Last resort: if still 1 row, try smallest divisor >= 2 that
-                 produces at least 2 rows (common case: 2-col table) */
+              /* Last resort: smallest even divisor */
               if (tabData.length === 1 && maxCols > 3) {
                 for (var tryC = 2; tryC <= Math.min(8, Math.floor(maxCols / 2)); tryC++) {
                   if (maxCols % tryC === 0) {
@@ -2408,14 +2461,10 @@
                 }
               }
             }
-
-            /* Only treat as table if we have at least 2 columns */
             if (maxCols >= 2) {
-              /* Pad short rows */
               for (var pi = 0; pi < tabData.length; pi++) {
                 while (tabData[pi].length < maxCols) tabData[pi].push('');
               }
-              /* Escape HTML entities and convert empty cells to <br> */
               data = tabData.map(function(row) {
                 return row.map(function(cell) {
                   var escaped = cell.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -2426,84 +2475,109 @@
           }
         }
 
-        /* If we didn't detect a table, let Quill handle the paste normally */
-        if (!data || data.length === 0) {
-          setTimeout(makeTableCellsEditable, 150);
-          return;
-        }
-
-        /* ── We have table data! Block Quill and insert our clean table ── */
+        /* ── ALWAYS prevent default — Quill must NEVER process paste itself.
+           clipboard.convert mangles table HTML into character-per-cell fragments. ── */
         e.preventDefault();
         e.stopPropagation();
         e.stopImmediatePropagation();
 
-        /* Build clean table HTML with contenteditable for direct DOM insertion */
-        var cleanTableHTML = buildTableHTML(data, false) + '<p><br></p>';
+        /* ── TABLE PASTE PATH ── */
+        if (data && data.length > 0) {
+          var cleanTableHTML = buildTableHTML(data, false) + '<p><br></p>';
 
-        /* ── Capture state BEFORE paste for undo support ── */
-        var deltaBefore = null;
-        try { deltaBefore = quill.getContents(); } catch(e0) {}
+          /* Capture state BEFORE paste for undo */
+          var deltaBefore = null;
+          try { deltaBefore = quill.getContents(); } catch(e0) {}
 
-        /* Insert directly into DOM, bypassing Quill's clipboard.convert entirely.
-           clipboard.convert is known to mangle table structure (flattening rows). */
-        quill.disable();
-
-        var sel = window.getSelection();
-        var insertTarget = null;
-        if (sel && sel.rangeCount > 0) {
-          var rng = sel.getRangeAt(0);
-          var block = rng.startContainer;
-          if (block.nodeType === 3) block = block.parentElement;
-          while (block && block !== quill.root && block.parentElement !== quill.root) {
-            block = block.parentElement;
-          }
-          insertTarget = block;
-        }
-
-        var frag = document.createRange().createContextualFragment(cleanTableHTML);
-        if (insertTarget && insertTarget.parentElement === quill.root) {
-          insertTarget.parentElement.insertBefore(frag, insertTarget.nextSibling);
-        } else {
-          quill.root.appendChild(frag);
-        }
-
-        /* Capture correct HTML while Quill is frozen (MutationObserver disabled) */
-        var safeHTML = quill.root.innerHTML;
-        quill.enable();
-
-        /* Force-set innerHTML — completely bypass clipboard.convert */
-        quill.root.innerHTML = safeHTML;
-        try { quill.update('silent'); } catch(err) {}
-
-        /* Verify update didn't mangle — re-set if needed */
-        var expectedCells = (safeHTML.match(/<t[dh][\s>]/gi) || []).length;
-        var gotCells = quill.root.querySelectorAll('td, th').length;
-        if (gotCells < expectedCells) {
-          quill.root.innerHTML = safeHTML;
-          try { quill.update('silent'); } catch(err2) {}
-        }
-
-        /* ── Record in Quill's history for undo support ── */
-        if (deltaBefore) {
-          try {
-            var deltaAfter = quill.getContents();
-            var changeDelta = deltaBefore.diff(deltaAfter);
-            if (changeDelta && changeDelta.ops && changeDelta.ops.length > 0) {
-              var undoDelta = changeDelta.invert(deltaBefore);
-              var history = quill.getModule('history');
-              if (history && history.stack) {
-                history.stack.undo.push({ delta: undoDelta, range: null });
-                history.stack.redo = [];
-              }
+          /* Insert via direct innerHTML (bypass clipboard.convert) */
+          quill.disable();
+          var sel = window.getSelection();
+          var insertTarget = null;
+          if (sel && sel.rangeCount > 0) {
+            var rng = sel.getRangeAt(0);
+            var block = rng.startContainer;
+            if (block.nodeType === 3) block = block.parentElement;
+            while (block && block !== quill.root && block.parentElement !== quill.root) {
+              block = block.parentElement;
             }
-          } catch(histErr) { /* undo may not work for this paste, but table is intact */ }
+            insertTarget = block;
+          }
+          var frag = document.createRange().createContextualFragment(cleanTableHTML);
+          if (insertTarget && insertTarget.parentElement === quill.root) {
+            insertTarget.parentElement.insertBefore(frag, insertTarget.nextSibling);
+          } else {
+            quill.root.appendChild(frag);
+          }
+          var safeHTML = quill.root.innerHTML;
+          quill.enable();
+          quill.root.innerHTML = safeHTML;
+          try { quill.update('silent'); } catch(err) {}
+
+          /* Verify cells survived — check count AND row count */
+          var expectedCells = (safeHTML.match(/<t[dh][\s>]/gi) || []).length;
+          var expectedRows = (safeHTML.match(/<tr[\s>]/gi) || []).length;
+          var gotCells = quill.root.querySelectorAll('td, th').length;
+          var gotRows = quill.root.querySelectorAll('tr').length;
+          if (gotCells < expectedCells || gotRows < expectedRows) {
+            quill.root.innerHTML = safeHTML;
+          }
+
+          /* Record in Quill's history for undo */
+          if (deltaBefore) {
+            try {
+              var deltaAfter = quill.getContents();
+              var changeDelta = deltaBefore.diff(deltaAfter);
+              if (changeDelta && changeDelta.ops && changeDelta.ops.length > 0) {
+                var undoDelta = changeDelta.invert(deltaBefore);
+                var history = quill.getModule('history');
+                if (history && history.stack) {
+                  history.stack.undo.push({ delta: undoDelta, range: null });
+                  history.stack.redo = [];
+                }
+              }
+            } catch(histErr) {}
+          }
+
+          if (typeof lastLoadedContent !== 'undefined') lastLoadedContent = quill.root.innerHTML;
+          makeTableCellsEditable();
+          if (typeof saveTimer !== 'undefined' && saveTimer) clearTimeout(saveTimer);
+          if (typeof saveCurrentNote === 'function') saveCurrentNote();
+          return;
         }
 
-        if (typeof lastLoadedContent !== 'undefined') lastLoadedContent = quill.root.innerHTML;
-        makeTableCellsEditable();
-
-        if (typeof saveTimer !== 'undefined' && saveTimer) clearTimeout(saveTimer);
-        if (typeof saveCurrentNote === 'function') saveCurrentNote();
+        /* ── NON-TABLE PASTE PATH ──
+           Strip any residual table HTML to prevent Quill from mangling it,
+           then use dangerouslyPasteHTML for rich text (safe for non-table content). */
+        var range = quill.getSelection(true);
+        var idx = range ? range.index : quill.getLength() - 1;
+        if (html) {
+          /* Strip table tags from HTML so clipboard.convert can't mangle them */
+          var tmpDiv = document.createElement('div');
+          tmpDiv.innerHTML = html;
+          tmpDiv.querySelectorAll('table, thead, tbody, tfoot, colgroup, col').forEach(function(el) {
+            while (el.firstChild) el.parentNode.insertBefore(el.firstChild, el);
+            el.remove();
+          });
+          tmpDiv.querySelectorAll('tr').forEach(function(tr) {
+            var p = document.createElement('p');
+            while (tr.firstChild) p.appendChild(tr.firstChild);
+            tr.parentNode.insertBefore(p, tr);
+            tr.remove();
+          });
+          tmpDiv.querySelectorAll('td, th').forEach(function(cell) {
+            while (cell.firstChild) cell.parentNode.insertBefore(cell.firstChild, cell);
+            cell.remove();
+          });
+          var safeNonTableHTML = tmpDiv.innerHTML;
+          try {
+            quill.clipboard.dangerouslyPasteHTML(idx, safeNonTableHTML, 'user');
+          } catch(pasteErr) {
+            quill.insertText(idx, plainText || '', 'user');
+          }
+        } else if (plainText) {
+          quill.insertText(idx, plainText, 'user');
+        }
+        setTimeout(makeTableCellsEditable, 150);
       }, true); /* capture phase */
 
       /* ── Enter key inside table cells → native line break ──
@@ -2883,11 +2957,12 @@
           /* Normal cell click — clear any row/col selection */
           clearTableSelection();
           onCellFocus(cell);
-          /* Ensure the cell actually receives focus so typing works */
-          if (document.activeElement !== cell) {
+          /* Only set cursor position if user isn't making a text selection (drag).
+             Check: if there's already a non-collapsed selection, leave it alone. */
+          var existingSel = window.getSelection();
+          var hasTextSelection = existingSel && !existingSel.isCollapsed && existingSel.toString().length > 0;
+          if (!hasTextSelection && document.activeElement !== cell) {
             cell.focus();
-            /* Place cursor at click position using caretPositionFromPoint / caretRangeFromPoint */
-            var sel = window.getSelection();
             var range = null;
             if (document.caretRangeFromPoint) {
               range = document.caretRangeFromPoint(e.clientX, e.clientY);
@@ -2900,8 +2975,8 @@
               }
             }
             if (range) {
-              sel.removeAllRanges();
-              sel.addRange(range);
+              existingSel.removeAllRanges();
+              existingSel.addRange(range);
             }
           }
         } else {
@@ -3166,45 +3241,81 @@
         }
       });
 
-      /* ── Mouse: start resize on mousedown near border ── */
+      /* ── Mouse: start resize on mousedown near border ──
+         CRITICAL: Do NOT call preventDefault() on mousedown — that kills text selection.
+         Instead, record the potential resize edge and start position. Only begin
+         the actual resize if the user drags > 4px (confirming resize intent). */
+      var pendingResize = null; /* { edge, startX, startY } */
+      var DRAG_THRESHOLD = 4; /* px of movement required to start resize */
+
       quill.root.addEventListener('mousedown', function(e) {
         var cell = e.target.closest ? e.target.closest('td, th') : null;
-        if (!cell) return;
+        if (!cell) { pendingResize = null; return; }
         var edge = detectEdge(cell, e.clientX, e.clientY);
-        if (!edge) return;
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        startResize(edge, e.clientX, e.clientY);
+        if (!edge) { pendingResize = null; return; }
+        /* Just record — don't preventDefault, don't start resize yet */
+        pendingResize = { edge: edge, startX: e.clientX, startY: e.clientY };
       });
       document.addEventListener('mousemove', function(e) {
-        if (!resizeState) return;
-        e.preventDefault();
-        doResize(e.clientX, e.clientY);
+        /* If already resizing, continue */
+        if (resizeState) {
+          e.preventDefault();
+          doResize(e.clientX, e.clientY);
+          return;
+        }
+        /* If we have a pending resize, check if user has dragged far enough */
+        if (pendingResize) {
+          var dx = Math.abs(e.clientX - pendingResize.startX);
+          var dy = Math.abs(e.clientY - pendingResize.startY);
+          if (dx > DRAG_THRESHOLD || dy > DRAG_THRESHOLD) {
+            /* User is dragging — NOW start the resize */
+            e.preventDefault();
+            startResize(pendingResize.edge, pendingResize.startX, pendingResize.startY);
+            pendingResize = null;
+            doResize(e.clientX, e.clientY);
+          }
+        }
       });
       document.addEventListener('mouseup', function() {
+        pendingResize = null;
         if (resizeState) endResize();
       });
 
-      /* ── Touch: start resize on touchstart near border ── */
+      /* ── Touch: start resize on touchstart near border ──
+         Same drag-threshold approach as mouse to avoid blocking text selection */
+      var pendingTouchResize = null;
       quill.root.addEventListener('touchstart', function(e) {
         if (e.touches.length !== 1) return;
         var t = e.touches[0];
         var el = document.elementFromPoint(t.clientX, t.clientY);
         var cell = el ? (el.closest ? el.closest('td, th') : null) : null;
-        if (!cell) return;
+        if (!cell) { pendingTouchResize = null; return; }
         var edge = detectEdge(cell, t.clientX, t.clientY);
-        if (!edge) return;
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        startResize(edge, t.clientX, t.clientY);
-      }, {passive: false});
+        if (!edge) { pendingTouchResize = null; return; }
+        /* Record — don't preventDefault yet */
+        pendingTouchResize = { edge: edge, startX: t.clientX, startY: t.clientY };
+      }, {passive: true});
       document.addEventListener('touchmove', function(e) {
-        if (!resizeState) return;
-        e.preventDefault();
-        var t = e.touches[0];
-        doResize(t.clientX, t.clientY);
+        if (resizeState) {
+          e.preventDefault();
+          var t = e.touches[0];
+          doResize(t.clientX, t.clientY);
+          return;
+        }
+        if (pendingTouchResize && e.touches.length === 1) {
+          var t2 = e.touches[0];
+          var dx = Math.abs(t2.clientX - pendingTouchResize.startX);
+          var dy = Math.abs(t2.clientY - pendingTouchResize.startY);
+          if (dx > DRAG_THRESHOLD || dy > DRAG_THRESHOLD) {
+            e.preventDefault();
+            startResize(pendingTouchResize.edge, pendingTouchResize.startX, pendingTouchResize.startY);
+            pendingTouchResize = null;
+            doResize(t2.clientX, t2.clientY);
+          }
+        }
       }, {passive: false});
       document.addEventListener('touchend', function() {
+        pendingTouchResize = null;
         if (resizeState) endResize();
       });
 
@@ -4574,32 +4685,8 @@
     /* ── Intercept pasted/dropped images → compress before insert ── */
     /* Use capture:true + stopImmediatePropagation to prevent Quill's own
        clipboard/uploader from ALSO inserting the image (causing duplicates) */
-    quill.root.addEventListener('paste', function(e) {
-      var cd = e.clipboardData;
-      if (!cd || !cd.items) return;
-      for (var i = 0; i < cd.items.length; i++) {
-        if (cd.items[i].type.indexOf('image') === 0) {
-          e.preventDefault();
-          e.stopImmediatePropagation();
-          var file = cd.items[i].getAsFile();
-          if (!file) return;
-          (async function() {
-            var range = quill.getSelection(true);
-            try {
-              var dataUrl = await compressImage(file);
-              quill.insertEmbed(range.index, 'image', dataUrl, 'user');
-              quill.setSelection(range.index + 1, 0, 'silent');
-              /* Force immediate save */
-              if(saveTimer) clearTimeout(saveTimer);
-              saveCurrentNote();
-            } catch(err) {
-              quill.insertText(range.index, '[Image failed: '+err.message+']', {color:'#DC2626'}, 'user');
-            }
-          })();
-          return;
-        }
-      }
-    }, true);
+    /* Image paste handler is now integrated into the main table paste handler above.
+       This prevents event ordering issues between the two capture-phase listeners. */
 
     quill.root.addEventListener('drop', function(e) {
       if (!e.dataTransfer || !e.dataTransfer.files || !e.dataTransfer.files.length) return;
