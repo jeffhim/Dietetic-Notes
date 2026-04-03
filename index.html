@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Jeffrey's Dietetics v4.3</title>
+  <title>Jeffrey's Dietetics v4.4</title>
   <meta name="theme-color" content="#124B34" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#0A3A28" media="(prefers-color-scheme: dark)">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -2047,75 +2047,64 @@
     /* ── Keyboard shortcuts for undo/redo ── */
     var historyModule = quill.getModule('history');
 
-    /* HTML snapshot undo stack — backup for table operations.
-       Quill's delta-based undo can mangle table HTML, so we keep
-       full innerHTML snapshots as a fallback. */
+    /* ── Pure HTML snapshot undo/redo for table operations ──
+       Quill's delta model CANNOT represent table structure (rows, columns).
+       Delta-based undo changes cell TEXT but not table STRUCTURE.
+       So we bypass Quill's history entirely for table ops and use
+       full innerHTML snapshots instead. */
     var _tblSnapUndo = [];
     var _tblSnapRedo = [];
     var _TBL_SNAP_MAX = 60;
+    var _lastOpWasTable = false;
+
     window._pushTableSnapshot = function() {
       _tblSnapUndo.push(quill.root.innerHTML);
       _tblSnapRedo = [];
+      _lastOpWasTable = true;
       if (_tblSnapUndo.length > _TBL_SNAP_MAX) _tblSnapUndo.shift();
     };
 
-    /* Safe undo: tries Quill's delta undo first, then verifies table
-       integrity. Falls back to HTML snapshot if delta mangled tables. */
+    /* Restore HTML snapshot without Quill mangling it.
+       Key: set innerHTML while Quill is disabled, then re-enable
+       WITHOUT calling quill.update() which triggers normalization. */
+    function restoreSnapshot(html) {
+      quill.disable();
+      quill.root.innerHTML = html;
+      quill.enable();
+      /* Do NOT call quill.update('silent') — it mangles tables.
+         Quill's MutationObserver will eventually sync on next user interaction. */
+      if (window._tblMakeCellsEditable) window._tblMakeCellsEditable();
+      if (typeof lastLoadedContent !== 'undefined') lastLoadedContent = html;
+      if (typeof saveTimer !== 'undefined' && saveTimer) clearTimeout(saveTimer);
+      if (typeof saveCurrentNote === 'function') saveCurrentNote();
+    }
+
+    /* Safe undo/redo: checks HTML snapshot stack FIRST for table ops,
+       falls back to Quill's delta undo for normal text edits. */
     function safeHistoryOp(op) {
-      var htmlBefore = quill.root.innerHTML;
-      var tableCountBefore = (htmlBefore.match(/<table[\s>]/gi) || []).length;
-      var cellCountBefore = (htmlBefore.match(/<t[dh][\s>]/gi) || []).length;
-      var rowCountBefore = (htmlBefore.match(/<tr[\s>]/gi) || []).length;
-
-      if (op === 'undo') { historyModule.undo(); }
-      else { historyModule.redo(); }
-
-      /* Verify table integrity after delta application */
-      var htmlAfter = quill.root.innerHTML;
-      var domCells = quill.root.querySelectorAll('td, th').length;
-      var domRows = quill.root.querySelectorAll('tr').length;
-      var domTables = quill.root.querySelectorAll('table').length;
-      var srcCells = (htmlAfter.match(/<t[dh][\s>]/gi) || []).length;
-      var srcRows = (htmlAfter.match(/<tr[\s>]/gi) || []).length;
-      var srcTables = (htmlAfter.match(/<table[\s>]/gi) || []).length;
-
-      var mangled = false;
-      /* Case 1: innerHTML has tables but DOM lost them */
-      if (srcCells > 0 && domCells < srcCells) mangled = true;
-      if (srcRows > 0 && domRows < srcRows) mangled = true;
-      if (srcTables > 0 && domTables < srcTables) mangled = true;
-      /* Case 2: undo produced no visible change (delta silently failed) */
-      if (htmlAfter === htmlBefore && historyModule.stack && historyModule.stack.undo.length === 0) mangled = true;
-
-      if (mangled) {
-        /* Try to fix by re-setting innerHTML from what Quill produced */
-        quill.root.innerHTML = htmlAfter;
-        /* Re-check */
-        var fixedCells = quill.root.querySelectorAll('td, th').length;
-        if (fixedCells < srcCells) quill.root.innerHTML = htmlAfter;
+      if (op === 'undo') {
+        /* Try snapshot stack first */
+        if (_tblSnapUndo.length > 0) {
+          var currentHTML = quill.root.innerHTML;
+          var snapshot = _tblSnapUndo.pop();
+          _tblSnapRedo.push(currentHTML);
+          restoreSnapshot(snapshot);
+          return;
+        }
+        /* Fall back to Quill's delta undo for non-table ops */
+        historyModule.undo();
+      } else {
+        /* Redo: try snapshot stack first */
+        if (_tblSnapRedo.length > 0) {
+          var curHTML = quill.root.innerHTML;
+          var redoSnap = _tblSnapRedo.pop();
+          _tblSnapUndo.push(curHTML);
+          restoreSnapshot(redoSnap);
+          return;
+        }
+        /* Fall back to Quill's delta redo */
+        historyModule.redo();
       }
-
-      /* If undo didn't actually change content (Quill had nothing),
-         try our HTML snapshot stack as last resort */
-      if (op === 'undo' && htmlAfter === htmlBefore && _tblSnapUndo.length > 0) {
-        var snapshot = _tblSnapUndo.pop();
-        _tblSnapRedo.push(htmlBefore);
-        quill.root.innerHTML = snapshot;
-        try { quill.update('silent'); } catch(ue) {}
-        /* Verify snapshot wasn't mangled by update */
-        var snapCells = (snapshot.match(/<t[dh][\s>]/gi) || []).length;
-        var snapGot = quill.root.querySelectorAll('td, th').length;
-        if (snapGot < snapCells) quill.root.innerHTML = snapshot;
-      } else if (op === 'redo' && htmlAfter === htmlBefore && _tblSnapRedo.length > 0) {
-        var redoSnap = _tblSnapRedo.pop();
-        _tblSnapUndo.push(htmlBefore);
-        quill.root.innerHTML = redoSnap;
-        try { quill.update('silent'); } catch(ue2) {}
-        var rSnapCells = (redoSnap.match(/<t[dh][\s>]/gi) || []).length;
-        var rSnapGot = quill.root.querySelectorAll('td, th').length;
-        if (rSnapGot < rSnapCells) quill.root.innerHTML = redoSnap;
-      }
-
       if (window._tblMakeCellsEditable) window._tblMakeCellsEditable();
       if (typeof lastLoadedContent !== 'undefined') lastLoadedContent = quill.root.innerHTML;
     }
@@ -3104,8 +3093,7 @@
           var dhtml = quill.root.innerHTML;
           quill.enable();
           quill.root.innerHTML = dhtml;
-          try { quill.update('silent'); } catch(err) {}
-          if (typeof lastLoadedContent !== 'undefined') lastLoadedContent = quill.root.innerHTML;
+          if (typeof lastLoadedContent !== 'undefined') lastLoadedContent = dhtml;
           if (saveTimer) clearTimeout(saveTimer);
           saveCurrentNote();
           hideFloatBar();
@@ -3176,54 +3164,23 @@
             break;
         }
 
-        /* Capture state BEFORE rebuild for undo */
-        var deltaBefore = null;
-        try { deltaBefore = quill.getContents(); } catch(dbErr) {}
-
         /* Rebuild table HTML */
         var newHTML = buildTableHTML(data, hasHeader);
 
-        /* CRITICAL: Freeze Quill so its MutationObserver can't mangle the table */
+        /* CRITICAL: Freeze Quill so its MutationObserver can't mangle the table.
+           We do NOT call quill.update('silent') afterward — it triggers Quill's
+           normalizer which destroys table structure. Instead we set innerHTML
+           while Quill is disabled and re-enable without syncing. */
         quill.disable();
-
-        /* Replace old table with rebuilt one */
         replaceTable(table, newHTML);
-
-        /* Capture the CORRECT full editor HTML while Quill is frozen */
         var safeHTML = quill.root.innerHTML;
-
-        /* Re-enable Quill — bypass clipboard.convert entirely by setting innerHTML
-           directly. clipboard.convert can mangle table structure. */
         quill.enable();
+
+        /* Force innerHTML to our known-good state.
+           Do NOT call quill.update() — Quill's normalizer mangles tables. */
         quill.root.innerHTML = safeHTML;
-        try { quill.update('silent'); } catch(updateErr) {}
 
-        /* Verify update didn't mangle — check BOTH cell AND row counts */
-        var expectedCells = (safeHTML.match(/<t[dh][\s>]/gi) || []).length;
-        var expectedRows = (safeHTML.match(/<tr[\s>]/gi) || []).length;
-        var gotCells = quill.root.querySelectorAll('td, th').length;
-        var gotRows = quill.root.querySelectorAll('tr').length;
-        if (gotCells < expectedCells || gotRows < expectedRows) {
-          quill.root.innerHTML = safeHTML;
-        }
-
-        /* Record in Quill's history for undo — without this, undo skips table edits */
-        if (deltaBefore) {
-          try {
-            var deltaAfter = quill.getContents();
-            var changeDelta = deltaBefore.diff(deltaAfter);
-            if (changeDelta && changeDelta.ops && changeDelta.ops.length > 0) {
-              var undoDelta = changeDelta.invert(deltaBefore);
-              var histMod = quill.getModule('history');
-              if (histMod && histMod.stack) {
-                histMod.stack.undo.push({ delta: undoDelta, range: null });
-                histMod.stack.redo = [];
-              }
-            }
-          } catch(histErr) {}
-        }
-
-        if (typeof lastLoadedContent !== 'undefined') lastLoadedContent = quill.root.innerHTML;
+        if (typeof lastLoadedContent !== 'undefined') lastLoadedContent = safeHTML;
 
         /* Save */
         if (saveTimer) clearTimeout(saveTimer);
