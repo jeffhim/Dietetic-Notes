@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Jeffrey's Dietetics v4.5</title>
+  <title>Jeffrey's Dietetics v4.6</title>
   <meta name="theme-color" content="#124B34" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#0A3A28" media="(prefers-color-scheme: dark)">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -2537,6 +2537,226 @@
         return null;
       }
 
+      /* ── Table Column Adjuster Dialog ──
+         Shows after table paste with a live preview. User can:
+         1) Adjust column count with +/- buttons to fix the table structure
+         2) Insert the table with chosen columns
+         3) Paste as formatted text instead */
+      function showTableAdjusterDialog(flatCells, detectedCols, plainText) {
+        var existing = document.getElementById('tbl-adjuster-dialog');
+        if (existing) existing.remove();
+
+        var isDark = document.documentElement.classList.contains('dark');
+        var bgColor = isDark ? '#1e293b' : '#ffffff';
+        var textColor = isDark ? '#e2e8f0' : '#1e293b';
+        var borderColor = isDark ? '#475569' : '#cbd5e1';
+        var cellBg = isDark ? '#0f172a' : '#f8fafc';
+        var headerBg = isDark ? '#334155' : '#e2e8f0';
+
+        var currentCols = detectedCols;
+        var totalCells = flatCells.length;
+
+        var overlay = document.createElement('div');
+        overlay.id = 'tbl-adjuster-dialog';
+        overlay.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,0.5);' +
+          'display:flex;align-items:center;justify-content:center;padding:16px;';
+
+        var dialog = document.createElement('div');
+        dialog.style.cssText = 'background:' + bgColor + ';color:' + textColor + ';border-radius:12px;' +
+          'max-width:95vw;max-height:85vh;width:600px;display:flex;flex-direction:column;' +
+          'box-shadow:0 8px 32px rgba(0,0,0,0.4);overflow:hidden;';
+
+        /* Header */
+        var header = document.createElement('div');
+        header.style.cssText = 'padding:16px 20px;border-bottom:1px solid ' + borderColor + ';';
+        header.innerHTML = '<div style="font-size:16px;font-weight:700;">📊 Adjust Table Columns</div>' +
+          '<div style="font-size:13px;opacity:0.7;margin-top:4px;">' + totalCells + ' cells detected. ' +
+          'Adjust columns until the table looks right.</div>';
+
+        /* Column controls */
+        var controls = document.createElement('div');
+        controls.style.cssText = 'padding:12px 20px;display:flex;align-items:center;gap:12px;' +
+          'border-bottom:1px solid ' + borderColor + ';flex-wrap:wrap;';
+
+        var colLabel = document.createElement('span');
+        colLabel.style.cssText = 'font-size:14px;font-weight:600;';
+        colLabel.textContent = 'Columns:';
+
+        var btnMinus = document.createElement('button');
+        btnMinus.textContent = '−';
+        btnMinus.style.cssText = 'width:36px;height:36px;border-radius:8px;border:1px solid ' + borderColor +
+          ';background:' + cellBg + ';color:' + textColor + ';font-size:18px;font-weight:700;cursor:pointer;';
+
+        var colDisplay = document.createElement('span');
+        colDisplay.style.cssText = 'font-size:18px;font-weight:700;min-width:30px;text-align:center;';
+        colDisplay.textContent = currentCols;
+
+        var btnPlus = document.createElement('button');
+        btnPlus.textContent = '+';
+        btnPlus.style.cssText = btnMinus.style.cssText;
+
+        var rowInfo = document.createElement('span');
+        rowInfo.style.cssText = 'font-size:13px;opacity:0.6;margin-left:8px;';
+
+        controls.appendChild(colLabel);
+        controls.appendChild(btnMinus);
+        controls.appendChild(colDisplay);
+        controls.appendChild(btnPlus);
+        controls.appendChild(rowInfo);
+
+        /* Preview area */
+        var previewWrap = document.createElement('div');
+        previewWrap.style.cssText = 'flex:1;overflow:auto;padding:12px 20px;min-height:120px;max-height:50vh;';
+
+        var previewTable = document.createElement('div');
+        previewWrap.appendChild(previewTable);
+
+        /* Buttons */
+        var footer = document.createElement('div');
+        footer.style.cssText = 'padding:12px 20px;border-top:1px solid ' + borderColor +
+          ';display:flex;gap:8px;flex-wrap:wrap;';
+
+        var btnInsert = document.createElement('button');
+        btnInsert.textContent = '✓ Insert Table';
+        btnInsert.style.cssText = 'flex:1;padding:10px 16px;border-radius:8px;border:none;' +
+          'background:#059669;color:#fff;font-size:14px;font-weight:600;cursor:pointer;min-width:120px;';
+
+        var btnText = document.createElement('button');
+        btnText.textContent = '📝 Paste as Text';
+        btnText.style.cssText = 'flex:1;padding:10px 16px;border-radius:8px;border:1px solid ' + borderColor +
+          ';background:' + cellBg + ';color:' + textColor + ';font-size:14px;font-weight:600;cursor:pointer;min-width:120px;';
+
+        var btnCancel = document.createElement('button');
+        btnCancel.textContent = '✕ Cancel';
+        btnCancel.style.cssText = 'padding:10px 16px;border-radius:8px;border:1px solid ' + borderColor +
+          ';background:transparent;color:' + textColor + ';font-size:14px;cursor:pointer;opacity:0.7;';
+
+        footer.appendChild(btnInsert);
+        footer.appendChild(btnText);
+        footer.appendChild(btnCancel);
+
+        dialog.appendChild(header);
+        dialog.appendChild(controls);
+        dialog.appendChild(previewWrap);
+        dialog.appendChild(footer);
+        overlay.appendChild(dialog);
+
+        /* Render preview table */
+        function renderPreview() {
+          var cols = currentCols;
+          var rows = Math.ceil(totalCells / cols);
+          rowInfo.textContent = '→ ' + rows + ' rows × ' + cols + ' cols';
+          colDisplay.textContent = cols;
+
+          var html = '<table style="width:100%;border-collapse:collapse;font-size:12px;">';
+          for (var r = 0; r < Math.min(rows, 20); r++) {
+            html += '<tr>';
+            for (var c = 0; c < cols; c++) {
+              var idx = r * cols + c;
+              var val = idx < totalCells ? flatCells[idx] : '';
+              if (!val || val === '<br>') val = '<span style="opacity:0.3">—</span>';
+              var bg = r === 0 ? headerBg : cellBg;
+              html += '<td style="border:1px solid ' + borderColor + ';padding:4px 6px;background:' + bg +
+                ';max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + val + '</td>';
+            }
+            html += '</tr>';
+          }
+          if (rows > 20) html += '<tr><td colspan="' + cols + '" style="text-align:center;padding:6px;opacity:0.5;">... ' + (rows - 20) + ' more rows</td></tr>';
+          html += '</table>';
+          previewTable.innerHTML = html;
+        }
+
+        renderPreview();
+
+        btnMinus.onclick = function() {
+          if (currentCols > 1) { currentCols--; renderPreview(); }
+        };
+        btnPlus.onclick = function() {
+          if (currentCols < Math.min(totalCells, 20)) { currentCols++; renderPreview(); }
+        };
+
+        /* Insert table with current column count */
+        btnInsert.onclick = function() {
+          overlay.remove();
+          var cols = currentCols;
+          var rows = Math.ceil(totalCells / cols);
+          var tableData = [];
+          for (var r = 0; r < rows; r++) {
+            var rowArr = [];
+            for (var c = 0; c < cols; c++) {
+              var idx = r * cols + c;
+              rowArr.push(idx < totalCells ? flatCells[idx] : '<br>');
+            }
+            tableData.push(rowArr);
+          }
+          insertTableIntoEditor(tableData);
+        };
+
+        /* Paste as formatted text */
+        btnText.onclick = function() {
+          overlay.remove();
+          var textContent = '';
+          for (var ti = 0; ti < flatCells.length; ti++) {
+            var cellVal = flatCells[ti];
+            if (cellVal === '<br>' || !cellVal) continue;
+            /* Strip HTML tags for clean text */
+            var tmp = document.createElement('div');
+            tmp.innerHTML = cellVal;
+            var clean = tmp.textContent.trim();
+            if (clean) textContent += clean + '\n';
+          }
+          if (!textContent && plainText) textContent = plainText;
+          var range = quill.getSelection(true);
+          var idx = range ? range.index : quill.getLength() - 1;
+          quill.insertText(idx, textContent.trim(), 'user');
+          if (typeof saveTimer !== 'undefined' && saveTimer) clearTimeout(saveTimer);
+          if (typeof saveCurrentNote === 'function') saveCurrentNote();
+        };
+
+        btnCancel.onclick = function() { overlay.remove(); };
+        overlay.onclick = function(ev) { if (ev.target === overlay) overlay.remove(); };
+
+        document.body.appendChild(overlay);
+      }
+
+      /* Insert a 2D data array as a table into the editor */
+      function insertTableIntoEditor(tableData) {
+        if (!tableData || tableData.length === 0) return;
+
+        /* Push snapshot for undo */
+        if (window._pushTableSnapshot) window._pushTableSnapshot();
+
+        var cleanTableHTML = buildTableHTML(tableData, false) + '<p><br></p>';
+
+        quill.disable();
+        var sel = window.getSelection();
+        var insertTarget = null;
+        if (sel && sel.rangeCount > 0) {
+          var rng = sel.getRangeAt(0);
+          var block = rng.startContainer;
+          if (block.nodeType === 3) block = block.parentElement;
+          while (block && block !== quill.root && block.parentElement !== quill.root) {
+            block = block.parentElement;
+          }
+          insertTarget = block;
+        }
+        var frag = document.createRange().createContextualFragment(cleanTableHTML);
+        if (insertTarget && insertTarget.parentElement === quill.root) {
+          insertTarget.parentElement.insertBefore(frag, insertTarget.nextSibling);
+        } else {
+          quill.root.appendChild(frag);
+        }
+        var safeHTML = quill.root.innerHTML;
+        quill.enable();
+        quill.root.innerHTML = safeHTML;
+        /* Do NOT call quill.update('silent') — it mangles tables */
+
+        if (typeof lastLoadedContent !== 'undefined') lastLoadedContent = safeHTML;
+        makeTableCellsEditable();
+        if (typeof saveTimer !== 'undefined' && saveTimer) clearTimeout(saveTimer);
+        if (typeof saveCurrentNote === 'function') saveCurrentNote();
+      }
+
       /* Debug toast for paste diagnostics — shows clipboard info when table detection fails.
          Includes a "Convert to Table" button to let user manually trigger table conversion. */
       function showPasteDebugToast(html, plainText, clipTypes) {
@@ -2896,79 +3116,20 @@
 
         /* ── TABLE PASTE PATH ── */
         if (data && data.length > 0) {
-          /* Show brief diagnostic: which strategy detected the table and dimensions */
-          var _pasteStrategy = html && data._fromHTML ? 'HTML' : (plainText.indexOf('\t') !== -1 ? 'Tab' : 'Space');
-          var _pasteRows = data.length;
-          var _pasteCols = data[0] ? data[0].length : 0;
-          (function(s, r, c) {
-            var t = document.createElement('div');
-            t.style.cssText = 'position:fixed;bottom:12px;left:50%;transform:translateX(-50%);z-index:99999;' +
-              'background:#065f46;color:#d1fae5;padding:8px 16px;border-radius:8px;font-size:13px;font-weight:600;' +
-              'box-shadow:0 2px 8px rgba(0,0,0,0.3);pointer-events:none;';
-            t.textContent = 'Table pasted: ' + r + ' rows × ' + c + ' cols (via ' + s + ')';
-            document.body.appendChild(t);
-            setTimeout(function() { if (t.parentNode) t.remove(); }, 4000);
-          })(_pasteStrategy, _pasteRows, _pasteCols);
-
-          var cleanTableHTML = buildTableHTML(data, false) + '<p><br></p>';
-
-          /* Capture state BEFORE paste for undo */
-          var deltaBefore = null;
-          try { deltaBefore = quill.getContents(); } catch(e0) {}
-
-          /* Insert via direct innerHTML (bypass clipboard.convert) */
-          quill.disable();
-          var sel = window.getSelection();
-          var insertTarget = null;
-          if (sel && sel.rangeCount > 0) {
-            var rng = sel.getRangeAt(0);
-            var block = rng.startContainer;
-            if (block.nodeType === 3) block = block.parentElement;
-            while (block && block !== quill.root && block.parentElement !== quill.root) {
-              block = block.parentElement;
+          /* Flatten all cell content into a 1D array for column re-arrangement */
+          var flatCells = [];
+          for (var fi = 0; fi < data.length; fi++) {
+            for (var fj = 0; fj < data[fi].length; fj++) {
+              var cv = data[fi][fj];
+              if (typeof cv === 'object' && cv !== null) cv = cv.html || '';
+              flatCells.push(cv);
             }
-            insertTarget = block;
           }
-          var frag = document.createRange().createContextualFragment(cleanTableHTML);
-          if (insertTarget && insertTarget.parentElement === quill.root) {
-            insertTarget.parentElement.insertBefore(frag, insertTarget.nextSibling);
-          } else {
-            quill.root.appendChild(frag);
-          }
-          var safeHTML = quill.root.innerHTML;
-          quill.enable();
-          quill.root.innerHTML = safeHTML;
-          try { quill.update('silent'); } catch(err) {}
+          var origCols = data[0] ? data[0].length : 1;
 
-          /* Verify cells survived — check count AND row count */
-          var expectedCells = (safeHTML.match(/<t[dh][\s>]/gi) || []).length;
-          var expectedRows = (safeHTML.match(/<tr[\s>]/gi) || []).length;
-          var gotCells = quill.root.querySelectorAll('td, th').length;
-          var gotRows = quill.root.querySelectorAll('tr').length;
-          if (gotCells < expectedCells || gotRows < expectedRows) {
-            quill.root.innerHTML = safeHTML;
-          }
-
-          /* Record in Quill's history for undo */
-          if (deltaBefore) {
-            try {
-              var deltaAfter = quill.getContents();
-              var changeDelta = deltaBefore.diff(deltaAfter);
-              if (changeDelta && changeDelta.ops && changeDelta.ops.length > 0) {
-                var undoDelta = changeDelta.invert(deltaBefore);
-                var history = quill.getModule('history');
-                if (history && history.stack) {
-                  history.stack.undo.push({ delta: undoDelta, range: null });
-                  history.stack.redo = [];
-                }
-              }
-            } catch(histErr) {}
-          }
-
-          if (typeof lastLoadedContent !== 'undefined') lastLoadedContent = quill.root.innerHTML;
-          makeTableCellsEditable();
-          if (typeof saveTimer !== 'undefined' && saveTimer) clearTimeout(saveTimer);
-          if (typeof saveCurrentNote === 'function') saveCurrentNote();
+          /* Show column adjuster dialog — lets user pick the right column count
+             with a live preview, or paste as formatted text instead */
+          showTableAdjusterDialog(flatCells, origCols, plainText);
           return;
         }
 
