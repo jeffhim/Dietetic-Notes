@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Jeffrey's Dietetics v4.6</title>
+  <title>Jeffrey's Dietetics v4.7</title>
   <meta name="theme-color" content="#124B34" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#0A3A28" media="(prefers-color-scheme: dark)">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -2719,7 +2719,11 @@
         document.body.appendChild(overlay);
       }
 
-      /* Insert a 2D data array as a table into the editor */
+      /* Insert a 2D data array as a table into the editor.
+         KEY INSIGHT: Quill's MutationObserver automatically normalizes any DOM
+         changes, mangling table HTML. We must DISCONNECT the observer before
+         modifying the DOM and reconnect it after, so Quill never processes
+         the table insertion. */
       function insertTableIntoEditor(tableData) {
         if (!tableData || tableData.length === 0) return;
 
@@ -2728,30 +2732,52 @@
 
         var cleanTableHTML = buildTableHTML(tableData, false) + '<p><br></p>';
 
-        quill.disable();
-        var sel = window.getSelection();
-        var insertTarget = null;
-        if (sel && sel.rangeCount > 0) {
-          var rng = sel.getRangeAt(0);
-          var block = rng.startContainer;
-          if (block.nodeType === 3) block = block.parentElement;
-          while (block && block !== quill.root && block.parentElement !== quill.root) {
-            block = block.parentElement;
+        /* Step 1: Disconnect Quill's internal MutationObserver */
+        var scrollObs = null;
+        var obsConfig = { childList: true, subtree: true, characterData: true, characterDataOldValue: true, attributes: true };
+        try {
+          if (quill.scroll && quill.scroll.observer) {
+            scrollObs = quill.scroll.observer;
+            scrollObs.disconnect();
           }
-          insertTarget = block;
-        }
-        var frag = document.createRange().createContextualFragment(cleanTableHTML);
-        if (insertTarget && insertTarget.parentElement === quill.root) {
-          insertTarget.parentElement.insertBefore(frag, insertTarget.nextSibling);
-        } else {
-          quill.root.appendChild(frag);
-        }
-        var safeHTML = quill.root.innerHTML;
-        quill.enable();
-        quill.root.innerHTML = safeHTML;
-        /* Do NOT call quill.update('silent') — it mangles tables */
+        } catch(obsErr) {}
 
-        if (typeof lastLoadedContent !== 'undefined') lastLoadedContent = safeHTML;
+        /* Step 2: Build the new full HTML with table appended */
+        var currentHTML = quill.root.innerHTML;
+        /* Remove trailing empty paragraph so table connects cleanly */
+        currentHTML = currentHTML.replace(/<p><br\s*\/?><\/p>\s*$/, '');
+        var newFullHTML = currentHTML + cleanTableHTML;
+
+        /* Step 3: Set innerHTML directly (observer is disconnected) */
+        quill.root.innerHTML = newFullHTML;
+
+        /* Step 4: Reconnect observer — it only sees future mutations, not our change */
+        if (scrollObs) {
+          try {
+            scrollObs.observe(quill.scroll.domNode || quill.root, obsConfig);
+          } catch(reconErr) {}
+        }
+
+        /* Step 5: Set up a temporary guard for 500ms that restores the HTML
+           if Quill's enable/normalization cycle somehow mangles the table */
+        var guardHTML = quill.root.innerHTML;
+        var expectedTd = (guardHTML.match(/<t[dh][\s>]/gi) || []).length;
+        var expectedTr = (guardHTML.match(/<tr[\s>]/gi) || []).length;
+        var guardTimer = setInterval(function() {
+          var gotTd = quill.root.querySelectorAll('td, th').length;
+          var gotTr = quill.root.querySelectorAll('tr').length;
+          if (gotTd < expectedTd || gotTr < expectedTr) {
+            /* Table was mangled — restore */
+            if (scrollObs) { try { scrollObs.disconnect(); } catch(e) {} }
+            quill.root.innerHTML = guardHTML;
+            if (scrollObs) {
+              try { scrollObs.observe(quill.scroll.domNode || quill.root, obsConfig); } catch(e) {}
+            }
+          }
+        }, 50);
+        setTimeout(function() { clearInterval(guardTimer); }, 600);
+
+        if (typeof lastLoadedContent !== 'undefined') lastLoadedContent = guardHTML;
         makeTableCellsEditable();
         if (typeof saveTimer !== 'undefined' && saveTimer) clearTimeout(saveTimer);
         if (typeof saveCurrentNote === 'function') saveCurrentNote();
@@ -3383,18 +3409,36 @@
         /* Rebuild table HTML */
         var newHTML = buildTableHTML(data, hasHeader);
 
-        /* CRITICAL: Freeze Quill so its MutationObserver can't mangle the table.
-           We do NOT call quill.update('silent') afterward — it triggers Quill's
-           normalizer which destroys table structure. Instead we set innerHTML
-           while Quill is disabled and re-enable without syncing. */
-        quill.disable();
+        /* CRITICAL: Disconnect Quill's MutationObserver so it can't mangle
+           the table during rebuild. This is the ONLY reliable way to prevent
+           Quill's normalizer from destroying table structure. */
+        var scrollObs2 = null;
+        var obsConfig2 = { childList: true, subtree: true, characterData: true, characterDataOldValue: true, attributes: true };
+        try {
+          if (quill.scroll && quill.scroll.observer) {
+            scrollObs2 = quill.scroll.observer;
+            scrollObs2.disconnect();
+          }
+        } catch(obsErr2) {}
+
         replaceTable(table, newHTML);
         var safeHTML = quill.root.innerHTML;
-        quill.enable();
 
-        /* Force innerHTML to our known-good state.
-           Do NOT call quill.update() — Quill's normalizer mangles tables. */
-        quill.root.innerHTML = safeHTML;
+        /* Reconnect observer — it won't process our changes */
+        if (scrollObs2) {
+          try { scrollObs2.observe(quill.scroll.domNode || quill.root, obsConfig2); } catch(e2) {} }
+
+        /* Guard against delayed mangling */
+        var guardHTML2 = safeHTML;
+        var expTd2 = (guardHTML2.match(/<t[dh][\s>]/gi) || []).length;
+        var guardTimer2 = setInterval(function() {
+          if (quill.root.querySelectorAll('td, th').length < expTd2) {
+            if (scrollObs2) { try { scrollObs2.disconnect(); } catch(ge) {} }
+            quill.root.innerHTML = guardHTML2;
+            if (scrollObs2) { try { scrollObs2.observe(quill.scroll.domNode || quill.root, obsConfig2); } catch(ge2) {} }
+          }
+        }, 50);
+        setTimeout(function() { clearInterval(guardTimer2); }, 600);
 
         if (typeof lastLoadedContent !== 'undefined') lastLoadedContent = safeHTML;
 
