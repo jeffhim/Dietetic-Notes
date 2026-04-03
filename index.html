@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Jeffrey's Dietetics v4.8</title>
+  <title>Jeffrey's Dietetics v4.9</title>
   <meta name="theme-color" content="#124B34" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#0A3A28" media="(prefers-color-scheme: dark)">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -2064,17 +2064,10 @@
       if (_tblSnapUndo.length > _TBL_SNAP_MAX) _tblSnapUndo.shift();
     };
 
-    /* Restore HTML snapshot without Quill mangling it.
-       Key: set innerHTML while Quill is disabled, then re-enable
-       WITHOUT calling quill.update() which triggers normalization. */
+    /* Restore HTML snapshot using loadNoteHTML — the only proven way
+       to get tables into Quill reliably. */
     function restoreSnapshot(html) {
-      quill.disable();
-      quill.root.innerHTML = html;
-      quill.enable();
-      /* Do NOT call quill.update('silent') — it mangles tables.
-         Quill's MutationObserver will eventually sync on next user interaction. */
-      if (window._tblMakeCellsEditable) window._tblMakeCellsEditable();
-      if (typeof lastLoadedContent !== 'undefined') lastLoadedContent = html;
+      loadNoteHTML(html, true);
       if (typeof saveTimer !== 'undefined' && saveTimer) clearTimeout(saveTimer);
       if (typeof saveCurrentNote === 'function') saveCurrentNote();
     }
@@ -2720,9 +2713,11 @@
       }
 
       /* Insert a 2D data array as a table into the editor.
-         Uses the same proven approach as loadNoteHTML and restoreSnapshot:
-         disable Quill → set innerHTML → re-enable. This prevents Quill's
-         MutationObserver from mangling the table structure. */
+         Uses loadNoteHTML — the ONLY proven function that reliably gets
+         tables into Quill (it's how saved notes load from Firebase).
+         We build the combined HTML (existing + new table) and reload
+         the entire editor content through loadNoteHTML's multi-fallback
+         chain: clipboard.convert → setContents → innerHTML fallback. */
       function insertTableIntoEditor(tableData) {
         if (!tableData || tableData.length === 0) return;
 
@@ -2731,35 +2726,20 @@
 
         var cleanTableHTML = buildTableHTML(tableData, false) + '<p><br></p>';
 
-        /* Build the new full HTML with table appended */
+        /* Build the combined HTML: existing content + new table */
         var currentHTML = quill.root.innerHTML;
         /* Remove trailing empty paragraph so table connects cleanly */
         currentHTML = currentHTML.replace(/<p><br\s*\/?><\/p>\s*$/, '');
         var newFullHTML = currentHTML + cleanTableHTML;
 
-        /* Count expected cells in the new HTML for verification */
-        var expectedCells = (newFullHTML.match(/<t[dh][\s>]/gi) || []).length;
+        /* Use loadNoteHTML with keepHistory=true so undo stack is preserved.
+           loadNoteHTML handles the entire fallback chain:
+           1. clipboard.convert → setContents (syncs Quill model)
+           2. If cells are lost → innerHTML fallback
+           3. If update('silent') mangles again → innerHTML again, skip update
+           This is battle-tested — it's how every saved note with tables loads. */
+        loadNoteHTML(newFullHTML, true);
 
-        /* Approach: disable Quill → set innerHTML → re-enable.
-           quill.disable() pauses the MutationObserver so our innerHTML
-           change won't be processed/mangled. quill.enable() restarts
-           observation but only for FUTURE mutations. */
-        quill.disable();
-        quill.root.innerHTML = newFullHTML;
-        quill.enable();
-
-        /* Verify cells survived — if enable() triggered normalization,
-           force innerHTML again */
-        var actualCells = quill.root.querySelectorAll('td, th').length;
-        if (actualCells < expectedCells) {
-          quill.disable();
-          quill.root.innerHTML = newFullHTML;
-          quill.enable();
-        }
-
-        var finalHTML = quill.root.innerHTML;
-        if (typeof lastLoadedContent !== 'undefined') lastLoadedContent = finalHTML;
-        makeTableCellsEditable();
         if (typeof saveTimer !== 'undefined' && saveTimer) clearTimeout(saveTimer);
         if (typeof saveCurrentNote === 'function') saveCurrentNote();
       }
@@ -3387,29 +3367,47 @@
             break;
         }
 
-        /* Rebuild table HTML using disable/enable pattern to prevent
-           Quill's MutationObserver from mangling the table structure. */
+        /* Rebuild table: replace in a disconnected DOM copy, then reload
+           the full HTML through loadNoteHTML — the only proven way to get
+           tables into Quill without mangling. */
         var newHTML = buildTableHTML(data, hasHeader);
 
-        /* Disable Quill → replace table DOM → capture full HTML →
-           re-enable Quill. This is the same proven approach used by
-           restoreSnapshot and insertTableIntoEditor. */
-        var expectedNewCells = (newHTML.match(/<t[dh][\s>]/gi) || []).length;
-        quill.disable();
-        replaceTable(table, newHTML);
-        var safeHTML = quill.root.innerHTML;
-        quill.enable();
-
-        /* Verify cells survived re-enable; force innerHTML if mangled */
-        var gotCells = quill.root.querySelectorAll('td, th').length;
-        var totalExpected = (safeHTML.match(/<t[dh][\s>]/gi) || []).length;
-        if (gotCells < totalExpected) {
-          quill.disable();
-          quill.root.innerHTML = safeHTML;
-          quill.enable();
+        /* Build desired full HTML by replacing the table in a temp container
+           (avoids touching the live DOM where Quill's observer would fire) */
+        var tmpContainer = document.createElement('div');
+        tmpContainer.innerHTML = quill.root.innerHTML;
+        /* Find the matching table in the clone. We identify it by row count
+           similarity since DOM references don't carry over to the clone. */
+        var tmpTables = tmpContainer.querySelectorAll('table');
+        var targetTmpTable = null;
+        if (tmpTables.length === 1) {
+          targetTmpTable = tmpTables[0];
+        } else {
+          /* Multiple tables — find the one that matches the original table's
+             row count (before modification) */
+          var origRowCount = rowIndex >= 0 ? data.length + (action === 'deleteRow' ? 1 : (action === 'addRowAbove' || action === 'addRowBelow' ? -1 : 0)) : data.length;
+          for (var tti = 0; tti < tmpTables.length; tti++) {
+            var ttr = tmpTables[tti].querySelectorAll('tr').length;
+            if (ttr === origRowCount || ttr === data.length) {
+              targetTmpTable = tmpTables[tti];
+              break;
+            }
+          }
+          if (!targetTmpTable) targetTmpTable = tmpTables[tmpTables.length - 1];
         }
 
-        if (typeof lastLoadedContent !== 'undefined') lastLoadedContent = quill.root.innerHTML;
+        if (targetTmpTable) {
+          var newTblEl = document.createElement('div');
+          newTblEl.innerHTML = newHTML;
+          targetTmpTable.parentNode.replaceChild(newTblEl.firstChild, targetTmpTable);
+        }
+
+        var desiredFullHTML = tmpContainer.innerHTML;
+
+        /* Use loadNoteHTML to reload the entire editor content.
+           This is the battle-tested path (clipboard.convert → setContents
+           → innerHTML fallback) that successfully loads saved notes. */
+        loadNoteHTML(desiredFullHTML, true);
 
         /* Save */
         if (saveTimer) clearTimeout(saveTimer);
