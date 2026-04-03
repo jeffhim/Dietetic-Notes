@@ -2046,11 +2046,85 @@
 
     /* ── Keyboard shortcuts for undo/redo ── */
     var historyModule = quill.getModule('history');
+
+    /* HTML snapshot undo stack — backup for table operations.
+       Quill's delta-based undo can mangle table HTML, so we keep
+       full innerHTML snapshots as a fallback. */
+    var _tblSnapUndo = [];
+    var _tblSnapRedo = [];
+    var _TBL_SNAP_MAX = 60;
+    window._pushTableSnapshot = function() {
+      _tblSnapUndo.push(quill.root.innerHTML);
+      _tblSnapRedo = [];
+      if (_tblSnapUndo.length > _TBL_SNAP_MAX) _tblSnapUndo.shift();
+    };
+
+    /* Safe undo: tries Quill's delta undo first, then verifies table
+       integrity. Falls back to HTML snapshot if delta mangled tables. */
+    function safeHistoryOp(op) {
+      var htmlBefore = quill.root.innerHTML;
+      var tableCountBefore = (htmlBefore.match(/<table[\s>]/gi) || []).length;
+      var cellCountBefore = (htmlBefore.match(/<t[dh][\s>]/gi) || []).length;
+      var rowCountBefore = (htmlBefore.match(/<tr[\s>]/gi) || []).length;
+
+      if (op === 'undo') { historyModule.undo(); }
+      else { historyModule.redo(); }
+
+      /* Verify table integrity after delta application */
+      var htmlAfter = quill.root.innerHTML;
+      var domCells = quill.root.querySelectorAll('td, th').length;
+      var domRows = quill.root.querySelectorAll('tr').length;
+      var domTables = quill.root.querySelectorAll('table').length;
+      var srcCells = (htmlAfter.match(/<t[dh][\s>]/gi) || []).length;
+      var srcRows = (htmlAfter.match(/<tr[\s>]/gi) || []).length;
+      var srcTables = (htmlAfter.match(/<table[\s>]/gi) || []).length;
+
+      var mangled = false;
+      /* Case 1: innerHTML has tables but DOM lost them */
+      if (srcCells > 0 && domCells < srcCells) mangled = true;
+      if (srcRows > 0 && domRows < srcRows) mangled = true;
+      if (srcTables > 0 && domTables < srcTables) mangled = true;
+      /* Case 2: undo produced no visible change (delta silently failed) */
+      if (htmlAfter === htmlBefore && historyModule.stack && historyModule.stack.undo.length === 0) mangled = true;
+
+      if (mangled) {
+        /* Try to fix by re-setting innerHTML from what Quill produced */
+        quill.root.innerHTML = htmlAfter;
+        /* Re-check */
+        var fixedCells = quill.root.querySelectorAll('td, th').length;
+        if (fixedCells < srcCells) quill.root.innerHTML = htmlAfter;
+      }
+
+      /* If undo didn't actually change content (Quill had nothing),
+         try our HTML snapshot stack as last resort */
+      if (op === 'undo' && htmlAfter === htmlBefore && _tblSnapUndo.length > 0) {
+        var snapshot = _tblSnapUndo.pop();
+        _tblSnapRedo.push(htmlBefore);
+        quill.root.innerHTML = snapshot;
+        try { quill.update('silent'); } catch(ue) {}
+        /* Verify snapshot wasn't mangled by update */
+        var snapCells = (snapshot.match(/<t[dh][\s>]/gi) || []).length;
+        var snapGot = quill.root.querySelectorAll('td, th').length;
+        if (snapGot < snapCells) quill.root.innerHTML = snapshot;
+      } else if (op === 'redo' && htmlAfter === htmlBefore && _tblSnapRedo.length > 0) {
+        var redoSnap = _tblSnapRedo.pop();
+        _tblSnapUndo.push(htmlBefore);
+        quill.root.innerHTML = redoSnap;
+        try { quill.update('silent'); } catch(ue2) {}
+        var rSnapCells = (redoSnap.match(/<t[dh][\s>]/gi) || []).length;
+        var rSnapGot = quill.root.querySelectorAll('td, th').length;
+        if (rSnapGot < rSnapCells) quill.root.innerHTML = redoSnap;
+      }
+
+      if (window._tblMakeCellsEditable) window._tblMakeCellsEditable();
+      if (typeof lastLoadedContent !== 'undefined') lastLoadedContent = quill.root.innerHTML;
+    }
+
     quill.root.addEventListener('keydown', function(e) {
       if ((e.ctrlKey || e.metaKey) && !e.altKey) {
-        if (e.key === 'z' && !e.shiftKey) { e.preventDefault(); historyModule.undo(); }
-        else if (e.key === 'z' && e.shiftKey) { e.preventDefault(); historyModule.redo(); }
-        else if (e.key === 'y' && !e.shiftKey) { e.preventDefault(); historyModule.redo(); }
+        if (e.key === 'z' && !e.shiftKey) { e.preventDefault(); safeHistoryOp('undo'); }
+        else if (e.key === 'z' && e.shiftKey) { e.preventDefault(); safeHistoryOp('redo'); }
+        else if (e.key === 'y' && !e.shiftKey) { e.preventDefault(); safeHistoryOp('redo'); }
       }
     });
 
@@ -2096,7 +2170,7 @@
         newUndo.title = 'Undo';
         newUndo.setAttribute('type', 'button');
         origUndo.parentNode.replaceChild(newUndo, origUndo);
-        newUndo.addEventListener('click', function(e) { e.preventDefault(); histMod.undo(); });
+        newUndo.addEventListener('click', function(e) { e.preventDefault(); safeHistoryOp('undo'); });
       }
       var origRedo = document.querySelector('.ql-redo');
       if (origRedo) {
@@ -2105,7 +2179,7 @@
         newRedo.title = 'Redo';
         newRedo.setAttribute('type', 'button');
         origRedo.parentNode.replaceChild(newRedo, origRedo);
-        newRedo.addEventListener('click', function(e) { e.preventDefault(); histMod.redo(); });
+        newRedo.addEventListener('click', function(e) { e.preventDefault(); safeHistoryOp('redo'); });
       }
     })();
 
@@ -2376,7 +2450,252 @@
           }
         }
 
+        /* Fallback: CSS display:table styled divs (some editors use these instead of <table>) */
+        var styledRows = tmp.querySelectorAll('[style*="table-row"]');
+        if (styledRows.length >= 2) {
+          var cssData = [];
+          styledRows.forEach(function(row) {
+            var cells = row.querySelectorAll('[style*="table-cell"]');
+            if (cells.length === 0) cells = row.children;
+            var rowData = [];
+            for (var ci = 0; ci < cells.length; ci++) {
+              var text = cells[ci].textContent.trim();
+              var cellHTML = text ? text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') : '<br>';
+              rowData.push(cellHTML);
+            }
+            if (rowData.length > 0) cssData.push(rowData);
+          });
+          if (cssData.length >= 2) {
+            var maxC4 = 0;
+            cssData.forEach(function(r) { if (r.length > maxC4) maxC4 = r.length; });
+            if (maxC4 >= 2) {
+              cssData.forEach(function(r) { while (r.length < maxC4) r.push('<br>'); });
+              return cssData;
+            }
+          }
+        }
+
+        /* Fallback: Brute-force regex on raw HTML string.
+           If querySelectorAll missed tables (encoding, namespaces, malformed HTML),
+           try matching <tr>...</tr> and <td>/<th> via regex directly on the raw string. */
+        if (htmlStr && /<table[\s>]/i.test(htmlStr)) {
+          var regexData = [];
+          var rowMatches = htmlStr.match(/<tr[\s>][\s\S]*?<\/tr>/gi);
+          if (rowMatches) {
+            rowMatches.forEach(function(rowHtml) {
+              var cellMatches = rowHtml.match(/<t[dh][\s>][\s\S]*?<\/t[dh]>/gi);
+              if (cellMatches) {
+                var rowData = cellMatches.map(function(cellHtml) {
+                  var tmpCell = document.createElement('div');
+                  tmpCell.innerHTML = cellHtml;
+                  var text = tmpCell.textContent.trim();
+                  return text ? text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') : '<br>';
+                });
+                if (rowData.length > 0) regexData.push(rowData);
+              }
+            });
+            if (regexData.length > 0) {
+              var maxC5 = 0;
+              regexData.forEach(function(r) { if (r.length > maxC5) maxC5 = r.length; });
+              if (maxC5 >= 2) {
+                regexData.forEach(function(r) { while (r.length < maxC5) r.push('<br>'); });
+                return regexData;
+              }
+            }
+          }
+        }
+
         return null;
+      }
+
+      /* Debug toast for paste diagnostics — shows clipboard info when table detection fails.
+         Includes a "Convert to Table" button to let user manually trigger table conversion. */
+      function showPasteDebugToast(html, plainText, clipTypes) {
+        var existing = document.getElementById('paste-debug-toast');
+        if (existing) existing.remove();
+
+        var hasTableTag = html && /<table[\s>]/i.test(html);
+        var hasTrTag = html && /<tr[\s>]/i.test(html);
+        var hasTdTag = html && /<t[dh][\s>]/i.test(html);
+        var textLines = plainText ? plainText.split(/\r\n|\n|\r/).filter(function(l) { return l.trim(); }) : [];
+        var tabCount = plainText ? (plainText.match(/\t/g) || []).length : 0;
+
+        var isDark = document.documentElement.classList.contains('dark');
+        var toast = document.createElement('div');
+        toast.id = 'paste-debug-toast';
+        toast.style.cssText = 'position:fixed;top:8px;left:50%;transform:translateX(-50%);z-index:99999;' +
+          'background:' + (isDark ? '#1e293b' : '#ffffff') + ';color:' + (isDark ? '#e2e8f0' : '#1e293b') + ';' +
+          'padding:12px 16px;border-radius:10px;font-size:12px;font-family:monospace;max-width:92vw;' +
+          'overflow:auto;max-height:260px;box-shadow:0 4px 20px rgba(0,0,0,0.35);' +
+          'border:1px solid ' + (isDark ? '#475569' : '#cbd5e1') + ';white-space:pre-wrap;word-break:break-all;';
+
+        var info = '<b>📋 Paste Debug</b> (tap anywhere to dismiss)\n';
+        info += 'Clipboard types: ' + (clipTypes || 'unknown') + '\n';
+        info += 'HTML: ' + (html ? html.length + ' chars' : '<b>EMPTY</b>') + '\n';
+        if (html) info += '  has &lt;table&gt;: ' + hasTableTag + '  &lt;tr&gt;: ' + hasTrTag + '  &lt;td/th&gt;: ' + hasTdTag + '\n';
+        info += 'Plain text: ' + (plainText ? plainText.length + ' chars, ' + textLines.length + ' lines' : '<b>EMPTY</b>') + '\n';
+        info += 'Tab chars in text: ' + tabCount + '\n';
+        if (html) {
+          info += '\n<b>--- HTML (first 600 chars) ---</b>\n';
+          info += html.substring(0, 600).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        }
+        if (plainText) {
+          info += '\n\n<b>--- Plain text (first 400 chars) ---</b>\n';
+          info += plainText.substring(0, 400).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        }
+
+        /* "Convert to Table" button — tries to build a table from the plain text */
+        info += '\n\n';
+
+        toast.innerHTML = info;
+
+        var btnConvert = document.createElement('button');
+        btnConvert.textContent = '🔄 Convert Pasted Text to Table';
+        btnConvert.style.cssText = 'display:block;margin:6px auto 0;padding:8px 16px;border-radius:6px;' +
+          'background:#2563eb;color:#fff;border:none;font-size:13px;cursor:pointer;font-weight:600;';
+        btnConvert.onclick = function(ev) {
+          ev.stopPropagation();
+          toast.remove();
+          convertLastPasteToTable(plainText, html);
+        };
+        toast.appendChild(btnConvert);
+
+        toast.onclick = function(ev) { if (ev.target === toast || ev.target.tagName !== 'BUTTON') toast.remove(); };
+        document.body.appendChild(toast);
+        setTimeout(function() { if (toast.parentNode) toast.remove(); }, 60000);
+      }
+
+      /* Attempt to convert pasted plain text into a table.
+         Tries multiple heuristics: double-space separated, consistent line length, etc. */
+      function convertLastPasteToTable(plainText, html) {
+        if (!plainText) return;
+        var textLines = plainText.split(/\r\n|\n|\r/).filter(function(l) { return l.trim() !== ''; });
+        if (textLines.length < 2) return;
+
+        var data = null;
+
+        /* Heuristic 1: Lines separated by 2+ spaces */
+        var spaceSplit = textLines.map(function(l) { return l.trim().split(/\s{2,}/); });
+        var colCounts = spaceSplit.map(function(s) { return s.length; });
+        var countFreq = {};
+        colCounts.forEach(function(c) { countFreq[c] = (countFreq[c] || 0) + 1; });
+        var bestCount = 0, bestFreq = 0;
+        for (var c in countFreq) {
+          if (parseInt(c) >= 2 && countFreq[c] > bestFreq) { bestCount = parseInt(c); bestFreq = countFreq[c]; }
+        }
+        if (bestCount >= 2 && bestFreq >= textLines.length * 0.5) {
+          data = spaceSplit.map(function(cols) {
+            while (cols.length < bestCount) cols.push('');
+            return cols.slice(0, bestCount).map(function(cell) {
+              return (cell.trim() || '<br>').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            });
+          });
+        }
+
+        /* Heuristic 2: If all lines have similar length, try fixed-width columns */
+        if (!data && textLines.length >= 2) {
+          /* Try to detect column boundaries from spaces that appear at the same position in most lines */
+          var maxLen = 0;
+          textLines.forEach(function(l) { if (l.length > maxLen) maxLen = l.length; });
+          if (maxLen > 10) {
+            var spaceFreq = new Array(maxLen).fill(0);
+            textLines.forEach(function(l) {
+              for (var i = 0; i < l.length; i++) {
+                if (l[i] === ' ' && i > 0 && i < l.length - 1) spaceFreq[i]++;
+              }
+            });
+            /* Find positions where most lines have spaces (potential column boundaries) */
+            var threshold = textLines.length * 0.6;
+            var boundaries = [0];
+            var inGap = false;
+            for (var i = 1; i < maxLen - 1; i++) {
+              if (spaceFreq[i] >= threshold && !inGap) {
+                inGap = true;
+              } else if (spaceFreq[i] < threshold && inGap) {
+                boundaries.push(i);
+                inGap = false;
+              }
+            }
+            boundaries.push(maxLen);
+            if (boundaries.length >= 3) {
+              data = textLines.map(function(line) {
+                var row = [];
+                for (var b = 0; b < boundaries.length - 1; b++) {
+                  var cell = line.substring(boundaries[b], boundaries[b + 1]).trim();
+                  row.push((cell || '<br>').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'));
+                }
+                return row;
+              });
+            }
+          }
+        }
+
+        /* Heuristic 3: If even number of lines, try pairing lines as rows with 2 columns each */
+        if (!data && textLines.length >= 4 && textLines.length % 2 === 0) {
+          data = [];
+          for (var pi = 0; pi < textLines.length; pi += 2) {
+            data.push([
+              (textLines[pi].trim() || '<br>').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'),
+              (textLines[pi + 1].trim() || '<br>').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            ]);
+          }
+        }
+
+        if (!data || data.length === 0) return;
+
+        /* Insert the table */
+        var cleanTableHTML = buildTableHTML(data, false) + '<p><br></p>';
+        var deltaBefore = null;
+        try { deltaBefore = quill.getContents(); } catch(e0) {}
+
+        /* Try to replace the most recently pasted content — undo it first */
+        try {
+          var history = quill.getModule('history');
+          if (history) history.undo();
+        } catch(undoErr) {}
+
+        quill.disable();
+        var sel = window.getSelection();
+        var insertTarget = null;
+        if (sel && sel.rangeCount > 0) {
+          var rng = sel.getRangeAt(0);
+          var block = rng.startContainer;
+          if (block.nodeType === 3) block = block.parentElement;
+          while (block && block !== quill.root && block.parentElement !== quill.root) {
+            block = block.parentElement;
+          }
+          insertTarget = block;
+        }
+        var frag = document.createRange().createContextualFragment(cleanTableHTML);
+        if (insertTarget && insertTarget.parentElement === quill.root) {
+          insertTarget.parentElement.insertBefore(frag, insertTarget.nextSibling);
+        } else {
+          quill.root.appendChild(frag);
+        }
+        var safeHTML = quill.root.innerHTML;
+        quill.enable();
+        quill.root.innerHTML = safeHTML;
+        try { quill.update('silent'); } catch(err) {}
+
+        if (deltaBefore) {
+          try {
+            var deltaAfter = quill.getContents();
+            var changeDelta = deltaBefore.diff(deltaAfter);
+            if (changeDelta && changeDelta.ops && changeDelta.ops.length > 0) {
+              var undoDelta = changeDelta.invert(deltaBefore);
+              var hist = quill.getModule('history');
+              if (hist && hist.stack) {
+                hist.stack.undo.push({ delta: undoDelta, range: null });
+                hist.stack.redo = [];
+              }
+            }
+          } catch(histErr) {}
+        }
+
+        if (typeof lastLoadedContent !== 'undefined') lastLoadedContent = quill.root.innerHTML;
+        makeTableCellsEditable();
+        if (typeof saveTimer !== 'undefined' && saveTimer) clearTimeout(saveTimer);
+        if (typeof saveCurrentNote === 'function') saveCurrentNote();
       }
 
       quill.root.addEventListener('paste', function(e) {
@@ -2411,6 +2730,7 @@
 
         var plainText = cd.getData('text/plain') || '';
         var html = cd.getData('text/html') || '';
+        var clipTypes = cd.types ? Array.prototype.slice.call(cd.types).join(', ') : 'unknown';
         var data = null; /* 2D array of cell contents */
 
         /* ── Strategy 1: Parse HTML for table structures ──
@@ -2471,6 +2791,69 @@
                   return escaped.trim() || '<br>';
                 });
               });
+            }
+          }
+        }
+
+        /* ── Strategy 3: Multi-line plain text with consistent spacing (no tabs).
+           OneNote on iOS often sends only text/plain with spaces between cells. ── */
+        if (!data && plainText) {
+          var s3Lines = plainText.split(/\r\n|\n|\r|\u2028|\u2029/).filter(function(l) { return l.trim() !== ''; });
+          if (s3Lines.length >= 2) {
+            /* Try splitting each line by 2+ consecutive spaces */
+            var s3Split = s3Lines.map(function(l) { return l.trim().split(/\s{2,}/); });
+            var s3ColCounts = s3Split.map(function(s) { return s.length; });
+            var s3Freq = {};
+            s3ColCounts.forEach(function(c) { s3Freq[c] = (s3Freq[c] || 0) + 1; });
+            var s3Best = 0, s3BestFreq = 0;
+            for (var s3c in s3Freq) {
+              if (parseInt(s3c) >= 2 && s3Freq[s3c] > s3BestFreq) { s3Best = parseInt(s3c); s3BestFreq = s3Freq[s3c]; }
+            }
+            if (s3Best >= 2 && s3BestFreq >= s3Lines.length * 0.5) {
+              data = s3Split.map(function(cols) {
+                while (cols.length < s3Best) cols.push('');
+                return cols.slice(0, s3Best).map(function(cell) {
+                  var escaped = cell.trim().replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                  return escaped || '<br>';
+                });
+              });
+            }
+
+            /* If double-space splitting didn't work, try fixed-width column detection */
+            if (!data && s3Lines.length >= 2) {
+              var s3MaxLen = 0;
+              s3Lines.forEach(function(l) { if (l.length > s3MaxLen) s3MaxLen = l.length; });
+              if (s3MaxLen > 10) {
+                var s3SpaceFreq = [];
+                for (var s3i = 0; s3i < s3MaxLen; s3i++) s3SpaceFreq.push(0);
+                s3Lines.forEach(function(l) {
+                  for (var s3j = 1; s3j < l.length - 1; s3j++) {
+                    if (l[s3j] === ' ' && (l[s3j - 1] === ' ' || l[s3j + 1] === ' ')) s3SpaceFreq[s3j]++;
+                  }
+                });
+                var s3Threshold = s3Lines.length * 0.5;
+                var s3Boundaries = [0];
+                var s3InGap = false;
+                for (var s3k = 1; s3k < s3MaxLen - 1; s3k++) {
+                  if (s3SpaceFreq[s3k] >= s3Threshold && !s3InGap) {
+                    s3InGap = true;
+                  } else if (s3SpaceFreq[s3k] < s3Threshold && s3InGap) {
+                    s3Boundaries.push(s3k);
+                    s3InGap = false;
+                  }
+                }
+                s3Boundaries.push(s3MaxLen + 20);
+                if (s3Boundaries.length >= 3) {
+                  data = s3Lines.map(function(line) {
+                    var row = [];
+                    for (var s3b = 0; s3b < s3Boundaries.length - 1; s3b++) {
+                      var cellText = line.substring(s3Boundaries[s3b], s3Boundaries[s3b + 1]).trim();
+                      row.push((cellText || '<br>').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'));
+                    }
+                    return row;
+                  });
+                }
+              }
             }
           }
         }
@@ -2543,6 +2926,12 @@
           if (typeof saveTimer !== 'undefined' && saveTimer) clearTimeout(saveTimer);
           if (typeof saveCurrentNote === 'function') saveCurrentNote();
           return;
+        }
+
+        /* ── ALWAYS show paste debug toast when table detection fails.
+           Critical for diagnosing iOS standalone mode clipboard issues. ── */
+        if (plainText || html) {
+          showPasteDebugToast(html, plainText, clipTypes);
         }
 
         /* ── NON-TABLE PASTE PATH ──
@@ -2705,6 +3094,9 @@
           return;
         }
 
+        /* Push HTML snapshot for undo BEFORE any table-modifying operation */
+        if (window._pushTableSnapshot) window._pushTableSnapshot();
+
         /* Delete table — simple case */
         if (action === 'deleteTable') {
           quill.disable();
@@ -2784,6 +3176,10 @@
             break;
         }
 
+        /* Capture state BEFORE rebuild for undo */
+        var deltaBefore = null;
+        try { deltaBefore = quill.getContents(); } catch(dbErr) {}
+
         /* Rebuild table HTML */
         var newHTML = buildTableHTML(data, hasHeader);
 
@@ -2800,11 +3196,33 @@
            directly. clipboard.convert can mangle table structure. */
         quill.enable();
         quill.root.innerHTML = safeHTML;
-        try { quill.update('silent'); } catch(err) {}
-        /* Verify update didn't mangle — re-set if needed */
+        try { quill.update('silent'); } catch(updateErr) {}
+
+        /* Verify update didn't mangle — check BOTH cell AND row counts */
         var expectedCells = (safeHTML.match(/<t[dh][\s>]/gi) || []).length;
+        var expectedRows = (safeHTML.match(/<tr[\s>]/gi) || []).length;
         var gotCells = quill.root.querySelectorAll('td, th').length;
-        if (gotCells < expectedCells) quill.root.innerHTML = safeHTML;
+        var gotRows = quill.root.querySelectorAll('tr').length;
+        if (gotCells < expectedCells || gotRows < expectedRows) {
+          quill.root.innerHTML = safeHTML;
+        }
+
+        /* Record in Quill's history for undo — without this, undo skips table edits */
+        if (deltaBefore) {
+          try {
+            var deltaAfter = quill.getContents();
+            var changeDelta = deltaBefore.diff(deltaAfter);
+            if (changeDelta && changeDelta.ops && changeDelta.ops.length > 0) {
+              var undoDelta = changeDelta.invert(deltaBefore);
+              var histMod = quill.getModule('history');
+              if (histMod && histMod.stack) {
+                histMod.stack.undo.push({ delta: undoDelta, range: null });
+                histMod.stack.redo = [];
+              }
+            }
+          } catch(histErr) {}
+        }
+
         if (typeof lastLoadedContent !== 'undefined') lastLoadedContent = quill.root.innerHTML;
 
         /* Save */
