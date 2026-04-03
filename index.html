@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Jeffrey's Dietetics v4.4</title>
+  <title>Jeffrey's Dietetics v4.5</title>
   <meta name="theme-color" content="#124B34" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#0A3A28" media="(prefers-color-scheme: dark)">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -2360,13 +2360,44 @@
         var bestCells = 0;
         for (var ti = 0; ti < allTables.length; ti++) {
           var tbl = allTables[ti];
-          var tblData = [];
+          /* Build a proper grid that handles colspan and rowspan.
+             OneNote commonly uses colspan for merged header cells. */
+          var rows = [];
           tbl.querySelectorAll('tr').forEach(function(row) {
-            /* Skip rows that are inside a NESTED table (not direct child of this table) */
             if (row.closest('table') !== tbl) return;
-            var rowData = [];
+            rows.push(row);
+          });
+          if (rows.length === 0) continue;
+
+          /* Phase 1: Determine the TRUE column count by scanning all rows */
+          var trueColCount = 0;
+          rows.forEach(function(row) {
+            var count = 0;
             row.querySelectorAll('td, th').forEach(function(cell) {
               if (cell.closest('table') !== tbl) return;
+              count += parseInt(cell.getAttribute('colspan')) || 1;
+            });
+            if (count > trueColCount) trueColCount = count;
+          });
+
+          /* Phase 2: Build a 2D grid with rowspan/colspan support */
+          var grid = [];
+          for (var gi = 0; gi < rows.length; gi++) grid.push(new Array(trueColCount).fill(null));
+
+          for (var ri = 0; ri < rows.length; ri++) {
+            var cells = rows[ri].querySelectorAll('td, th');
+            var colPos = 0;
+            for (var ci = 0; ci < cells.length; ci++) {
+              var cell = cells[ci];
+              if (cell.closest('table') !== tbl) continue;
+              /* Skip columns already filled by previous rowspans */
+              while (colPos < trueColCount && grid[ri][colPos] !== null) colPos++;
+              if (colPos >= trueColCount) break;
+
+              var colspan = parseInt(cell.getAttribute('colspan')) || 1;
+              var rowspan = parseInt(cell.getAttribute('rowspan')) || 1;
+
+              /* Extract cell content */
               var clone = cell.cloneNode(true);
               clone.querySelectorAll('table').forEach(function(nt) { nt.remove(); });
               clone.querySelectorAll('br').forEach(function(br) { br.replaceWith('\n'); });
@@ -2375,17 +2406,26 @@
               });
               var text = clone.textContent.replace(/\n{3,}/g, '\n\n').trim();
               var cellHTML = text ? text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>') : '<br>';
-              rowData.push(cellHTML);
-            });
-            if (rowData.length > 0) tblData.push(rowData);
+
+              /* Fill the grid for this cell's span */
+              for (var rs = 0; rs < rowspan && ri + rs < rows.length; rs++) {
+                for (var cs = 0; cs < colspan && colPos + cs < trueColCount; cs++) {
+                  /* Primary cell gets the content, spanned cells get empty */
+                  grid[ri + rs][colPos + cs] = (rs === 0 && cs === 0) ? cellHTML : '<br>';
+                }
+              }
+              colPos += colspan;
+            }
+          }
+
+          /* Fill any remaining nulls */
+          var tblData = grid.map(function(row) {
+            return row.map(function(cell) { return cell !== null ? cell : '<br>'; });
           });
-          if (tblData.length > 0) {
-            var maxC = 0;
-            tblData.forEach(function(r) { if (r.length > maxC) maxC = r.length; });
-            var totalCells = tblData.length * maxC;
-            /* Pick the table with the MOST cells (the real data table, not a layout wrapper) */
-            if (maxC >= 2 && totalCells > bestCells) {
-              tblData.forEach(function(r) { while (r.length < maxC) r.push('<br>'); });
+
+          if (tblData.length > 0 && trueColCount >= 2) {
+            var totalCells = tblData.length * trueColCount;
+            if (totalCells > bestCells) {
               bestData = tblData;
               bestCells = totalCells;
             }
@@ -2727,6 +2767,7 @@
            Also check for ARIA roles and loose <tr>/<td> elements. */
         if (html) {
           data = extractTableFromHTML(html);
+          if (data) data._fromHTML = true;
         }
 
         /* ── Strategy 2: Parse tab-delimited text/plain ──
@@ -2855,6 +2896,20 @@
 
         /* ── TABLE PASTE PATH ── */
         if (data && data.length > 0) {
+          /* Show brief diagnostic: which strategy detected the table and dimensions */
+          var _pasteStrategy = html && data._fromHTML ? 'HTML' : (plainText.indexOf('\t') !== -1 ? 'Tab' : 'Space');
+          var _pasteRows = data.length;
+          var _pasteCols = data[0] ? data[0].length : 0;
+          (function(s, r, c) {
+            var t = document.createElement('div');
+            t.style.cssText = 'position:fixed;bottom:12px;left:50%;transform:translateX(-50%);z-index:99999;' +
+              'background:#065f46;color:#d1fae5;padding:8px 16px;border-radius:8px;font-size:13px;font-weight:600;' +
+              'box-shadow:0 2px 8px rgba(0,0,0,0.3);pointer-events:none;';
+            t.textContent = 'Table pasted: ' + r + ' rows × ' + c + ' cols (via ' + s + ')';
+            document.body.appendChild(t);
+            setTimeout(function() { if (t.parentNode) t.remove(); }, 4000);
+          })(_pasteStrategy, _pasteRows, _pasteCols);
+
           var cleanTableHTML = buildTableHTML(data, false) + '<p><br></p>';
 
           /* Capture state BEFORE paste for undo */
