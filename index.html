@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Jeffrey's Dietetics v4.9</title>
+  <title>Jeffrey's Dietetics v5.0</title>
   <meta name="theme-color" content="#124B34" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#0A3A28" media="(prefers-color-scheme: dark)">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -2964,17 +2964,67 @@
           }
         }
 
+        /* ── CRITICAL: Prevent default IMMEDIATELY so Quill NEVER processes
+           the paste. Must be BEFORE any code that might throw an error.
+           Without this, if extractTableFromHTML throws, Quill takes over
+           and flattens everything to plain text. ── */
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+
+        try { /* Master try-catch — if ANYTHING below throws, we still paste plain text */
+
         var plainText = cd.getData('text/plain') || '';
         var html = cd.getData('text/html') || '';
         var clipTypes = cd.types ? Array.prototype.slice.call(cd.types).join(', ') : 'unknown';
         var data = null; /* 2D array of cell contents */
 
         /* ── Strategy 1: Parse HTML for table structures ──
-           Check ALL <table> elements (not just first — OneNote may nest layout tables).
-           Also check for ARIA roles and loose <tr>/<td> elements. */
+           Wrapped in try-catch — if extraction throws, we still have
+           fallback strategies below instead of silently dying. */
         if (html) {
-          data = extractTableFromHTML(html);
-          if (data) data._fromHTML = true;
+          try {
+            data = extractTableFromHTML(html);
+            if (data) data._fromHTML = true;
+          } catch (extractErr) {
+            console.log('extractTableFromHTML error: ' + extractErr.message);
+            data = null;
+          }
+        }
+
+        /* ── Strategy 1b: NUCLEAR FALLBACK — if HTML contains table tags
+           but extractTableFromHTML returned null or threw, brute-force
+           extract ALL td/th text content as flat cells ── */
+        if (!data && html && /<t[dh][\s>]/i.test(html)) {
+          try {
+            var bfDiv = document.createElement('div');
+            bfDiv.innerHTML = html;
+            var bfCells = bfDiv.querySelectorAll('td, th');
+            if (bfCells.length >= 2) {
+              var bfFlat = [];
+              bfCells.forEach(function(c) {
+                var t = c.textContent.trim();
+                bfFlat.push(t ? t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') : '<br>');
+              });
+              /* Try to guess column count from first <tr> */
+              var bfFirstTR = bfDiv.querySelector('tr');
+              var bfCols = bfFirstTR ? bfFirstTR.querySelectorAll('td, th').length : 0;
+              if (bfCols < 2) bfCols = Math.min(bfFlat.length, 5); /* default guess */
+              var bfRows = Math.ceil(bfFlat.length / bfCols);
+              data = [];
+              for (var bfi = 0; bfi < bfRows; bfi++) {
+                var bfRow = [];
+                for (var bfj = 0; bfj < bfCols; bfj++) {
+                  var bfIdx = bfi * bfCols + bfj;
+                  bfRow.push(bfIdx < bfFlat.length ? bfFlat[bfIdx] : '<br>');
+                }
+                data.push(bfRow);
+              }
+              data._fromHTML = true;
+            }
+          } catch (bfErr) {
+            console.log('Brute-force table extract error: ' + bfErr.message);
+          }
         }
 
         /* ── Strategy 2: Parse tab-delimited text/plain ──
@@ -3095,12 +3145,6 @@
           }
         }
 
-        /* ── ALWAYS prevent default — Quill must NEVER process paste itself.
-           clipboard.convert mangles table HTML into character-per-cell fragments. ── */
-        e.preventDefault();
-        e.stopPropagation();
-        e.stopImmediatePropagation();
-
         /* ── TABLE PASTE PATH ── */
         if (data && data.length > 0) {
           /* Flatten all cell content into a 1D array for column re-arrangement */
@@ -3118,12 +3162,6 @@
              with a live preview, or paste as formatted text instead */
           showTableAdjusterDialog(flatCells, origCols, plainText);
           return;
-        }
-
-        /* ── ALWAYS show paste debug toast when table detection fails.
-           Critical for diagnosing iOS standalone mode clipboard issues. ── */
-        if (plainText || html) {
-          showPasteDebugToast(html, plainText, clipTypes);
         }
 
         /* ── NON-TABLE PASTE PATH ──
@@ -3159,6 +3197,17 @@
           quill.insertText(idx, plainText, 'user');
         }
         setTimeout(makeTableCellsEditable, 150);
+
+        } catch (masterPasteErr) {
+          /* Last resort: if everything above failed, paste plain text */
+          console.log('Paste handler error: ' + masterPasteErr.message);
+          var fallbackText = cd.getData('text/plain') || '';
+          if (fallbackText) {
+            var fbRange = quill.getSelection(true);
+            var fbIdx = fbRange ? fbRange.index : quill.getLength() - 1;
+            quill.insertText(fbIdx, fallbackText, 'user');
+          }
+        }
       }, true); /* capture phase */
 
       /* ── Enter key inside table cells → native line break ──
