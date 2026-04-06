@@ -2032,6 +2032,7 @@
         toolbar:{
         container:[
           [{header:[1,2,3,false]}],['bold','italic','underline','strike'],
+          [{script:'sub'},{script:'super'}],
           [{color:[]},{background:[]}],[{list:'ordered'},{list:'bullet'}],
           [{indent:'-1'},{indent:'+1'}],
           ['blockquote','code-block'],['link','image'],['table-insert'],['clean'],
@@ -3696,6 +3697,21 @@
           hideFloatBar();
         }
       });
+
+      /* Hide float bar when Quill selection moves outside a table cell.
+         This catches keyboard navigation, programmatic selection changes,
+         and any other case where the cursor leaves a table. */
+      quill.on('selection-change', function(range) {
+        if (!range) return; /* editor lost focus — leave bar as-is */
+        /* Check if the current selection is inside a table cell */
+        var sel = window.getSelection();
+        if (!sel || sel.rangeCount === 0) { hideFloatBar(); return; }
+        var node = sel.anchorNode;
+        var el = (node && node.nodeType === 3) ? node.parentElement : node;
+        if (!el || !el.closest || !el.closest('td, th')) {
+          hideFloatBar();
+        }
+      });
       var editorBody = document.querySelector('.editor-body');
       if (editorBody) {
         editorBody.addEventListener('scroll', function() {
@@ -5218,6 +5234,7 @@
 
     function openNote(noteId) {
       saveCurrentNote();
+      if (typeof hideFloatBar === 'function') hideFloatBar();
       S.currentNoteId=noteId;
       let noteData=null;
       for(const k of Object.keys(S.notes)){ const f=S.notes[k].find(n=>n.id===noteId); if(f){noteData=f;break;} }
