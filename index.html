@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=5.0, user-scalable=yes">
   <title>Jeffrey's Dietetics v5.0</title>
   <meta name="theme-color" content="#124B34" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#0A3A28" media="(prefers-color-scheme: dark)">
@@ -428,9 +428,35 @@
       padding:2px 8px; font-size:11px; font-weight:700; color:var(--c-text-muted);
       white-space:nowrap; pointer-events:none; box-shadow:var(--shadow-sm);
     }
+    /* ── FONT SIZE PICKER ────────────────────── */
+    .ql-snow .ql-picker.ql-size { width:55px; }
+    .ql-snow .ql-picker.ql-size .ql-picker-label::before,
+    .ql-snow .ql-picker.ql-size .ql-picker-item::before { content:'16'; }
+    .ql-snow .ql-picker.ql-size .ql-picker-label[data-value="10px"]::before,
+    .ql-snow .ql-picker.ql-size .ql-picker-item[data-value="10px"]::before { content:'10'; font-size:10px; }
+    .ql-snow .ql-picker.ql-size .ql-picker-label[data-value="12px"]::before,
+    .ql-snow .ql-picker.ql-size .ql-picker-item[data-value="12px"]::before { content:'12'; font-size:12px; }
+    .ql-snow .ql-picker.ql-size .ql-picker-label[data-value="14px"]::before,
+    .ql-snow .ql-picker.ql-size .ql-picker-item[data-value="14px"]::before { content:'14'; font-size:14px; }
+    .ql-snow .ql-picker.ql-size .ql-picker-label[data-value="16px"]::before,
+    .ql-snow .ql-picker.ql-size .ql-picker-item[data-value="16px"]::before { content:'16'; font-size:16px; }
+    .ql-snow .ql-picker.ql-size .ql-picker-label[data-value="18px"]::before,
+    .ql-snow .ql-picker.ql-size .ql-picker-item[data-value="18px"]::before { content:'18'; font-size:18px; }
+    .ql-snow .ql-picker.ql-size .ql-picker-label[data-value="20px"]::before,
+    .ql-snow .ql-picker.ql-size .ql-picker-item[data-value="20px"]::before { content:'20'; font-size:18px; }
+    .ql-snow .ql-picker.ql-size .ql-picker-label[data-value="24px"]::before,
+    .ql-snow .ql-picker.ql-size .ql-picker-item[data-value="24px"]::before { content:'24'; font-size:18px; }
+    .ql-snow .ql-picker.ql-size .ql-picker-label[data-value="28px"]::before,
+    .ql-snow .ql-picker.ql-size .ql-picker-item[data-value="28px"]::before { content:'28'; font-size:18px; }
+    .ql-snow .ql-picker.ql-size .ql-picker-label[data-value="32px"]::before,
+    .ql-snow .ql-picker.ql-size .ql-picker-item[data-value="32px"]::before { content:'32'; font-size:18px; }
+    .ql-snow .ql-picker.ql-size .ql-picker-label[data-value="36px"]::before,
+    .ql-snow .ql-picker.ql-size .ql-picker-item[data-value="36px"]::before { content:'36'; font-size:18px; }
+    .ql-snow .ql-picker.ql-size .ql-picker-options { max-height:200px; overflow-y:auto; }
+
     /* ── TABLE STYLES ─────────────────────────── */
-    .ql-editor table { width:100%; border-collapse:collapse; margin:12px 0; font-size:14px; }
-    .ql-editor table td, .ql-editor table th { border:1px solid var(--c-border); padding:8px 10px; text-align:left; min-width:40px; vertical-align:top; word-wrap:break-word; overflow-wrap:break-word; cursor:text; position:relative; }
+    .ql-editor table { width:100%; border-collapse:collapse; margin:12px 0; font-size:14px; table-layout:auto; }
+    .ql-editor table td, .ql-editor table th { border:1px solid var(--c-border); padding:8px 10px; text-align:left; min-width:20px; vertical-align:top; word-wrap:break-word; overflow-wrap:break-word; word-break:break-word; cursor:text; position:relative; }
     .ql-editor table th { background:var(--c-surface-2); font-weight:700; font-size:13px; }
     .ql-editor table tr:nth-child(even) td { background:rgba(45,212,191,0.03); }
     html.dark .ql-editor table tr:nth-child(even) td { background:rgba(45,212,191,0.04); }
@@ -560,6 +586,24 @@
     #toast.show { transform:translateX(-50%) translateY(0); opacity:1; }
     #toast.success { background:#0D4A3A; color:#2DD4BF; border:1px solid rgba(45,212,191,0.3); }
     #toast.error { background:#4A1A1A; color:#F1948A; border:1px solid rgba(241,148,138,0.3); }
+
+    /* ── MOBILE TABLE FIT ──────────────────────── */
+    /* On small screens, shrink table font and padding so entire table
+       fits on screen. User can pinch-to-zoom to read small text. */
+    @media (max-width: 480px) {
+      .ql-editor table { font-size:11px; }
+      .ql-editor table td, .ql-editor table th { padding:4px 5px; min-width:10px; }
+      .ql-editor table th { font-size:11px; }
+    }
+    @media (max-width: 375px) {
+      .ql-editor table { font-size:9px; }
+      .ql-editor table td, .ql-editor table th { padding:3px 4px; }
+      .ql-editor table th { font-size:9px; }
+    }
+
+    /* Prevent iOS auto-zoom on input focus (need font-size >= 16px) */
+    input, select, textarea, .ql-editor { font-size:16px; }
+    .ql-snow .ql-picker { font-size:14px; }
   </style>
 </head>
 <body>
@@ -2025,13 +2069,20 @@
       currentCatId:null, currentSpecId:null, currentNoteId:null };
 
     const $=s=>document.querySelector(s);
+
+    /* Register custom font sizes with Quill */
+    var SizeStyle = Quill.import('attributors/style/size');
+    SizeStyle.whitelist = ['10px','12px','14px','16px','18px','20px','24px','28px','32px','36px'];
+    Quill.register(SizeStyle, true);
+
     const quill = new Quill('#quill-editor',{
       theme:'snow', placeholder:'Start writing your notes\u2026',
       modules:{
         history:{ delay:1000, maxStack:500, userOnly:true },
         toolbar:{
         container:[
-          [{header:[1,2,3,false]}],['bold','italic','underline','strike'],
+          [{header:[1,2,3,false]}],[{size:['10px','12px','14px','16px','18px','20px','24px','28px','32px','36px']}],
+          ['bold','italic','underline','strike'],
           [{script:'sub'},{script:'super'}],
           [{color:[]},{background:[]}],[{list:'ordered'},{list:'bullet'}],
           [{indent:'-1'},{indent:'+1'}],
