@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Jeffrey's Dietetics v5.0</title>
   <meta name="theme-color" content="#124B34" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#0A3A28" media="(prefers-color-scheme: dark)">
@@ -601,9 +601,27 @@
       .ql-editor table th { font-size:9px; }
     }
 
-    /* Prevent iOS auto-zoom on input focus (need font-size >= 16px) */
-    input, select, textarea, .ql-editor { font-size:16px; }
-    .ql-snow .ql-picker { font-size:14px; }
+    /* ── EDITOR ZOOM CONTROLS ────────────────── */
+    .editor-zoom-bar {
+      position:sticky; bottom:0; left:0; right:0; z-index:20;
+      display:flex; align-items:center; justify-content:center; gap:6px;
+      padding:5px 10px;
+      background:var(--c-surface-2); border-top:1px solid var(--c-border);
+      font-family:var(--font-main); font-size:12px; color:var(--c-text-secondary);
+    }
+    .editor-zoom-bar button {
+      width:30px; height:30px; border-radius:6px; border:1px solid var(--c-border);
+      background:var(--c-surface); color:var(--c-text); font-size:16px; font-weight:700;
+      cursor:pointer; display:flex; align-items:center; justify-content:center;
+      -webkit-tap-highlight-color:transparent; touch-action:manipulation;
+    }
+    .editor-zoom-bar button:active { background:var(--c-primary); color:#fff; }
+    .editor-zoom-bar .zoom-pct { min-width:40px; text-align:center; font-weight:600; font-size:13px; color:var(--c-text); }
+    .editor-zoom-bar .zoom-reset { font-size:11px; padding:0 8px; width:auto; font-weight:600; }
+
+    /* Transform-based zoom on editor — visual only, no layout change */
+    .ql-editor { transform-origin:top left; }
+
   </style>
 </head>
 <body>
@@ -688,6 +706,12 @@
         <div class="note-meta" id="note-meta"></div>
         <button class="btn-add-section" id="btn-add-section"><i class="fas fa-plus"></i> Add Section</button>
         <div class="editor-quill"><div id="quill-editor"></div></div>
+        <div class="editor-zoom-bar" id="editor-zoom-bar">
+          <button id="zoom-out" title="Zoom out">−</button>
+          <span class="zoom-pct" id="zoom-display">100%</span>
+          <button id="zoom-in" title="Zoom in">+</button>
+          <button class="zoom-reset" id="zoom-reset" title="Reset zoom">Reset</button>
+        </div>
       </div>
     </div>
 
@@ -2095,6 +2119,71 @@
         }
       }}
     });
+
+    /* ── Editor Zoom (CSS transform — visual only, no layout change) ── */
+    var editorZoom = 1.0;
+    var ZOOM_MIN = 0.5;
+    var ZOOM_MAX = 3.0;
+    var ZOOM_STEP = 0.15;
+
+    function setEditorZoom(level) {
+      editorZoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, Math.round(level * 100) / 100));
+      var editor = quill.root;
+      if (!editor) return;
+      editor.style.transform = 'scale(' + editorZoom + ')';
+      /* Scale width inversely so the scaled content fills the container width.
+         Height grows naturally and the parent scrolls vertically. */
+      editor.style.width = (100 / editorZoom) + '%';
+      var zoomDisplay = document.getElementById('zoom-display');
+      if (zoomDisplay) zoomDisplay.textContent = Math.round(editorZoom * 100) + '%';
+    }
+
+    /* Zoom buttons */
+    document.getElementById('zoom-in').addEventListener('click', function(e) {
+      e.preventDefault(); setEditorZoom(editorZoom + ZOOM_STEP);
+    });
+    document.getElementById('zoom-out').addEventListener('click', function(e) {
+      e.preventDefault(); setEditorZoom(editorZoom - ZOOM_STEP);
+    });
+    document.getElementById('zoom-reset').addEventListener('click', function(e) {
+      e.preventDefault(); setEditorZoom(1.0);
+    });
+
+    /* Pinch-to-zoom gesture on the editor area */
+    (function() {
+      var edBody = document.querySelector('.editor-body');
+      if (!edBody) return;
+      var pinchStartDist = 0;
+      var pinchStartZoom = 1;
+      var isPinching = false;
+
+      edBody.addEventListener('touchstart', function(e) {
+        if (e.touches.length === 2) {
+          isPinching = true;
+          pinchStartDist = Math.hypot(
+            e.touches[0].clientX - e.touches[1].clientX,
+            e.touches[0].clientY - e.touches[1].clientY
+          );
+          pinchStartZoom = editorZoom;
+        }
+      }, {passive: true});
+
+      edBody.addEventListener('touchmove', function(e) {
+        if (isPinching && e.touches.length === 2) {
+          e.preventDefault(); /* prevent scroll while pinching */
+          var dist = Math.hypot(
+            e.touches[0].clientX - e.touches[1].clientX,
+            e.touches[0].clientY - e.touches[1].clientY
+          );
+          var scale = dist / pinchStartDist;
+          setEditorZoom(pinchStartZoom * scale);
+        }
+      }, {passive: false});
+
+      edBody.addEventListener('touchend', function(e) {
+        if (e.touches.length < 2) isPinching = false;
+      }, {passive: true});
+    })();
 
     /* ── Keyboard shortcuts for undo/redo ── */
     var historyModule = quill.getModule('history');
