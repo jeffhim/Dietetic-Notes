@@ -2539,21 +2539,27 @@
       }
 
       function insertTableAtCursor(rows, cols) {
-        var range = quill.getSelection(true);
-        /* Build plain table — no headers, all blank cells */
-        var html = '<table><tbody>';
+        /* Build 2D data array for insertTableIntoEditor */
+        var tableData = [];
         for (var r = 0; r < rows; r++) {
-          html += '<tr>';
-          for (var c = 0; c < cols; c++) html += '<td><br></td>';
-          html += '</tr>';
+          var row = [];
+          for (var c = 0; c < cols; c++) row.push('<br>');
+          tableData.push(row);
         }
-        html += '</tbody></table><p><br></p>';
-
-        /* Insert via clipboard (pasteHTML) to preserve HTML structure */
-        var idx = range ? range.index : quill.getLength() - 1;
-        quill.clipboard.dangerouslyPasteHTML(idx, html, 'user');
-        /* Make cells editable */
-        setTimeout(function() { makeTableCellsEditable(); }, 50);
+        /* Find cursor block index for insertion */
+        var blockIdx = -1;
+        try {
+          var _s = window.getSelection();
+          if (_s && _s.rangeCount > 0) {
+            var _n = _s.getRangeAt(0).startContainer;
+            if (_n.nodeType === 3) _n = _n.parentElement;
+            while (_n && _n.parentElement !== quill.root) _n = _n.parentElement;
+            if (_n && _n.parentElement === quill.root) {
+              blockIdx = Array.from(quill.root.children).indexOf(_n);
+            }
+          }
+        } catch(e) {}
+        insertTableIntoEditor(tableData, blockIdx);
       }
 
       /* Make table cells editable — only called after table insert or paste, NOT on every keystroke */
@@ -2767,7 +2773,7 @@
          1) Adjust column count with +/- buttons to fix the table structure
          2) Insert the table with chosen columns
          3) Paste as formatted text instead */
-      function showTableAdjusterDialog(flatCells, detectedCols, plainText) {
+      function showTableAdjusterDialog(flatCells, detectedCols, plainText, insertBlockIndex) {
         var existing = document.getElementById('tbl-adjuster-dialog');
         if (existing) existing.remove();
 
@@ -2914,7 +2920,7 @@
             }
             tableData.push(rowArr);
           }
-          insertTableIntoEditor(tableData);
+          insertTableIntoEditor(tableData, insertBlockIndex);
         };
 
         /* Paste as formatted text */
@@ -2950,7 +2956,7 @@
          We build the combined HTML (existing + new table) and reload
          the entire editor content through loadNoteHTML's multi-fallback
          chain: clipboard.convert → setContents → innerHTML fallback. */
-      function insertTableIntoEditor(tableData) {
+      function insertTableIntoEditor(tableData, insertBlockIndex) {
         if (!tableData || tableData.length === 0) return;
 
         /* Push snapshot for undo */
@@ -2958,18 +2964,52 @@
 
         var cleanTableHTML = buildTableHTML(tableData, false) + '<p><br></p>';
 
-        /* Build the combined HTML: existing content + new table */
-        var currentHTML = quill.root.innerHTML;
-        /* Remove trailing empty paragraph so table connects cleanly */
-        currentHTML = currentHTML.replace(/<p><br\s*\/?><\/p>\s*$/, '');
-        var newFullHTML = currentHTML + cleanTableHTML;
+        /* ── Build combined HTML with table at the cursor position ── */
+        var tmpContainer = document.createElement('div');
+        tmpContainer.innerHTML = quill.root.innerHTML;
 
-        /* Use loadNoteHTML with keepHistory=true so undo stack is preserved.
-           loadNoteHTML handles the entire fallback chain:
-           1. clipboard.convert → setContents (syncs Quill model)
-           2. If cells are lost → innerHTML fallback
-           3. If update('silent') mangles again → innerHTML again, skip update
-           This is battle-tested — it's how every saved note with tables loads. */
+        /* Determine where to insert: use saved block index from paste,
+           or fall back to current browser selection, or append at end. */
+        var blockIdx = (typeof insertBlockIndex === 'number' && insertBlockIndex >= 0)
+          ? insertBlockIndex : -1;
+
+        /* Fallback: try live selection if no saved index */
+        if (blockIdx < 0) {
+          try {
+            var _s = window.getSelection();
+            if (_s && _s.rangeCount > 0) {
+              var _n = _s.getRangeAt(0).startContainer;
+              if (_n.nodeType === 3) _n = _n.parentElement;
+              while (_n && _n.parentElement !== quill.root) _n = _n.parentElement;
+              if (_n && _n.parentElement === quill.root) {
+                blockIdx = Array.from(quill.root.children).indexOf(_n);
+              }
+            }
+          } catch(e) {}
+        }
+
+        /* Insert table HTML into temp container at the right spot */
+        var frag = document.createRange().createContextualFragment(cleanTableHTML);
+        var children = tmpContainer.children;
+        if (blockIdx >= 0 && blockIdx < children.length) {
+          /* Insert AFTER the block at blockIdx */
+          var refBlock = children[blockIdx];
+          refBlock.parentNode.insertBefore(frag, refBlock.nextSibling);
+        } else {
+          /* Append at end (remove trailing empty <p> first) */
+          var lastChild = tmpContainer.lastElementChild;
+          if (lastChild && /^p$/i.test(lastChild.tagName) &&
+              (!lastChild.textContent || !lastChild.textContent.trim()) &&
+              !lastChild.querySelector('img')) {
+            lastChild.remove();
+          }
+          tmpContainer.appendChild(frag);
+        }
+
+        var newFullHTML = tmpContainer.innerHTML;
+
+        /* Reload the entire editor through loadNoteHTML — battle-tested path
+           that handles images, tables, and the table-protection patch. */
         loadNoteHTML(newFullHTML, true);
 
         if (typeof saveTimer !== 'undefined' && saveTimer) clearTimeout(saveTimer);
@@ -3390,9 +3430,26 @@
           }
           var origCols = data[0] ? data[0].length : 1;
 
+          /* Save cursor position BEFORE showing the dialog (focus will move to dialog buttons).
+             Find the block-level DOM element at the cursor — that's where we insert after. */
+          var _pasteBlockIndex = -1;
+          try {
+            var _sel = window.getSelection();
+            if (_sel && _sel.rangeCount > 0) {
+              var _rng = _sel.getRangeAt(0);
+              var _node = _rng.startContainer;
+              if (_node.nodeType === 3) _node = _node.parentElement;
+              /* Walk up to find direct child of quill.root */
+              while (_node && _node.parentElement !== quill.root) _node = _node.parentElement;
+              if (_node && _node.parentElement === quill.root) {
+                _pasteBlockIndex = Array.from(quill.root.children).indexOf(_node);
+              }
+            }
+          } catch(selErr) {}
+
           /* Show column adjuster dialog — lets user pick the right column count
              with a live preview, or paste as formatted text instead */
-          showTableAdjusterDialog(flatCells, origCols, plainText);
+          showTableAdjusterDialog(flatCells, origCols, plainText, _pasteBlockIndex);
           return;
         }
 
@@ -4175,9 +4232,15 @@
         if (resizeState) endResize();
       });
 
-      /* ── Touch: start resize on touchstart near border ──
-         Same drag-threshold approach as mouse to avoid blocking text selection */
+      /* ── Touch: start resize ONLY on deliberate drag perpendicular to the edge ──
+         On phone, normal scrolling (vertical finger movement) must NOT accidentally
+         trigger column resize. Requirements:
+         • Much higher drag threshold (20px vs 4px for mouse)
+         • Direction must match: column resize = horizontal drag dominant,
+                                  row resize = vertical drag dominant
+         • Perpendicular movement (scroll) must be < half the parallel movement */
       var pendingTouchResize = null;
+      var TOUCH_DRAG_THRESHOLD = 20; /* px — much higher than mouse to prevent accidental resize */
       quill.root.addEventListener('touchstart', function(e) {
         if (e.touches.length !== 1) return;
         var t = e.touches[0];
@@ -4200,11 +4263,22 @@
           var t2 = e.touches[0];
           var dx = Math.abs(t2.clientX - pendingTouchResize.startX);
           var dy = Math.abs(t2.clientY - pendingTouchResize.startY);
-          if (dx > DRAG_THRESHOLD || dy > DRAG_THRESHOLD) {
+          /* Direction check: drag must be DELIBERATE and in the RIGHT direction.
+             Column resize → horizontal (dx) must dominate: dx > threshold AND dx > dy*2
+             Row resize    → vertical (dy) must dominate:   dy > threshold AND dy > dx*2
+             This ensures normal scrolling (vertical) never triggers column resize,
+             and horizontal swipe never triggers row resize. */
+          var isCol = pendingTouchResize.edge.type === 'col';
+          var parallel = isCol ? dx : dy;
+          var perpendicular = isCol ? dy : dx;
+          if (parallel > TOUCH_DRAG_THRESHOLD && parallel > perpendicular * 2) {
             e.preventDefault();
             startResize(pendingTouchResize.edge, pendingTouchResize.startX, pendingTouchResize.startY);
             pendingTouchResize = null;
             doResize(t2.clientX, t2.clientY);
+          } else if (perpendicular > TOUCH_DRAG_THRESHOLD) {
+            /* User is scrolling — cancel the pending resize entirely */
+            pendingTouchResize = null;
           }
         }
       }, {passive: false});
