@@ -2130,6 +2130,75 @@
       }}
     });
 
+    /* ═══════════════════════════════════════════════════════════════════════
+       QUILL TABLE-PROTECTION PATCH
+       ─────────────────────────────────────────────────────────────────────
+       Quill 2.0.3 has NO Table blot registered, so its blot system has no
+       idea how to represent <table> elements. When mutations occur (paste,
+       innerHTML write, user typing in cells), Quill's Scroll.update() walks
+       the DOM, finds no blot for the table, and STRIPS or FLATTENS it.
+       Symptoms before this patch:
+         • Pasted table preview looks right but Insert produces nothing
+         • Adding a row to a 2x6 table collapses it to 1 row x N cells
+         • Tables in saved notes load corrupted on reopen
+       Fix: wrap quill.scroll.update so any mutations whose target is inside
+       a <table>, or which add/remove a <table>, are filtered out BEFORE
+       Quill processes them. Quill's delta model won't know about tables
+       (it never did), but the DOM keeps them intact, which is all we need
+       since saves use quill.root.innerHTML directly.
+       ═════════════════════════════════════════════════════════════════════ */
+    (function installTableProtectionPatch() {
+      if (!quill.scroll || typeof quill.scroll.update !== 'function') return;
+
+      function nodeInTable(node) {
+        var n = node;
+        while (n && n !== quill.root && n !== document) {
+          if (n.nodeType === 1 && n.tagName === 'TABLE') return true;
+          n = n.parentNode;
+        }
+        return false;
+      }
+      function nodeListHasTable(list) {
+        if (!list || !list.length) return false;
+        for (var i = 0; i < list.length; i++) {
+          var n = list[i];
+          if (!n || n.nodeType !== 1) continue;
+          if (n.tagName === 'TABLE') return true;
+          if (typeof n.querySelector === 'function' && n.querySelector('table')) return true;
+          /* Also catch table-related children that may appear in isolated mutations */
+          if (n.tagName === 'TR' || n.tagName === 'TD' || n.tagName === 'TH' ||
+              n.tagName === 'THEAD' || n.tagName === 'TBODY' || n.tagName === 'TFOOT') return true;
+        }
+        return false;
+      }
+
+      var origUpdate = quill.scroll.update.bind(quill.scroll);
+      quill.scroll.update = function(mutations, context) {
+        if (mutations && mutations.length) {
+          mutations = mutations.filter(function(m) {
+            if (!m) return false;
+            if (nodeInTable(m.target)) return false;
+            if (nodeListHasTable(m.addedNodes)) return false;
+            if (nodeListHasTable(m.removedNodes)) return false;
+            return true;
+          });
+        }
+        try { return origUpdate(mutations, context); }
+        catch(e) { /* swallow — table-related errors must not break the editor */ }
+      };
+
+      /* Also patch optimize so it doesn't try to rebuild blots for table descendants.
+         optimize() walks the blot tree; tables aren't in the blot tree, so this is
+         mostly defensive but cheap. */
+      if (typeof quill.scroll.optimize === 'function') {
+        var origOptimize = quill.scroll.optimize.bind(quill.scroll);
+        quill.scroll.optimize = function(mutations, context) {
+          try { return origOptimize(mutations, context); }
+          catch(e) { /* swallow */ }
+        };
+      }
+    })();
+
     /* ── Editor Zoom (CSS transform — visual only, no layout change) ── */
     var editorZoom = 1.0;
     var ZOOM_MIN = 0.5;
