@@ -3073,7 +3073,8 @@
         }
         var safeHTML = quill.root.innerHTML;
         quill.enable();
-        safeSetInnerHTML(safeHTML);
+        quill.root.innerHTML = safeHTML;
+        try { quill.update('silent'); } catch(err) {}
 
         if (deltaBefore) {
           try {
@@ -3412,33 +3413,10 @@
 
       function extractTableData(table) {
         var hasHeader = table.querySelector('thead') !== null;
-        /* Use :scope to get only DIRECT descendant <tr>s of this table
-           (not from nested tables). Check tbody/thead children first. */
-        var rows = [];
-        var sections = table.querySelectorAll(':scope > thead, :scope > tbody, :scope > tfoot');
-        if (sections.length > 0) {
-          sections.forEach(function(sec) {
-            sec.querySelectorAll(':scope > tr').forEach(function(tr) { rows.push(tr); });
-          });
-        } else {
-          /* No thead/tbody wrapper — direct <tr> children of <table> */
-          table.querySelectorAll(':scope > tr').forEach(function(tr) { rows.push(tr); });
-        }
-        /* Fallback: if :scope isn't supported or rows is empty, use filtering */
-        if (rows.length === 0) {
-          Array.from(table.querySelectorAll('tr')).forEach(function(tr) {
-            if (tr.closest('table') === table) rows.push(tr);
-          });
-        }
+        var rows = Array.from(table.querySelectorAll('tr'));
         var data = rows.map(function(r) {
-          return Array.from(r.children).filter(function(c) {
-            return c.tagName === 'TD' || c.tagName === 'TH';
-          }).map(function(c) {
-            /* Strip Quill wrapper <p> tags if present, keep inner content */
-            var cellHTML = c.innerHTML;
-            var stripped = cellHTML.replace(/^<p[^>]*>([\s\S]*)<\/p>$/i, '$1');
-            if (stripped !== cellHTML && stripped.indexOf('<p') === -1) cellHTML = stripped;
-            return { html: cellHTML || '<br>', align: c.style.textAlign || '' };
+          return Array.from(r.children).map(function(c) {
+            return { html: c.innerHTML, align: c.style.textAlign || '' };
           });
         });
         return { data: data, hasHeader: hasHeader };
@@ -3525,9 +3503,11 @@
 
         /* Delete table — simple case */
         if (action === 'deleteTable') {
+          quill.disable();
           table.remove();
           var dhtml = quill.root.innerHTML;
-          safeSetInnerHTML(dhtml);
+          quill.enable();
+          quill.root.innerHTML = dhtml;
           if (typeof lastLoadedContent !== 'undefined') lastLoadedContent = dhtml;
           if (saveTimer) clearTimeout(saveTimer);
           saveCurrentNote();
@@ -5344,23 +5324,7 @@
 
     /* ═══ EDITOR ══════════════════════════════════════ */
 
-    /* Helper: set quill.root.innerHTML with Quill's MutationObserver disconnected.
-       This prevents Quill from stripping tables or corrupting images after innerHTML. */
-    function safeSetInnerHTML(htmlContent) {
-      var sb = quill.scroll, obs = (sb && sb.observer) ? sb.observer : null;
-      if (obs) { try { obs.disconnect(); } catch(e) {} }
-      quill.root.innerHTML = htmlContent;
-      if (obs) {
-        try { obs.observe(sb.domNode, { childList:true, subtree:true, characterData:true, characterDataOldValue:true, attributes:true, attributeOldValue:true }); } catch(e) {}
-      }
-    }
-
-    /* ── Load HTML into Quill safely ──
-       For content with images or tables, we BYPASS Quill's delta conversion
-       entirely and use innerHTML directly. Quill's clipboard.convert mangles
-       tables (flattens rows) and corrupts base64 image src attributes.
-       We also disconnect Quill's MutationObserver during the innerHTML set
-       so it cannot strip or reorganize our raw HTML. */
+    /* ── Load HTML into Quill safely (protects long data-URLs from being mangled) ── */
     function loadNoteHTML(html, keepHistory) {
       lastLoadedContent = html || '';
 
@@ -5370,27 +5334,62 @@
 
       if (!html) { quill.setContents([{insert:'\n'}], 'silent'); if (!keepHistory) quill.getModule('history').clear(); if (edBody) edBody.scrollTop = savedScroll; return; }
 
-      /* Count expected images and table cells */
+      /* Count expected images and table cells so we can verify later */
       var expectedImgs = (html.match(/<img\s/gi) || []).length;
       var expectedCells = (html.match(/<t[dh][\s>]/gi) || []).length;
+      var expectedRows = (html.match(/<tr[\s>]/gi) || []).length;
 
       /* ── FAST PATH: If HTML contains images OR tables, skip delta conversion.
-            - Images: clipboard.convert corrupts long base64 data-URL src attributes
-            - Tables: clipboard.convert flattens rows (2×6 → 1×12) and
-              update('silent') / MutationObserver strip table elements entirely.
-            Direct innerHTML with observer disconnected is 100% lossless. ── */
+            Quill 2.0.3's clipboard.convert() does NOT reliably handle:
+            • base64 data-URL image srcs (gets sanitized/mangled)
+            • Table row boundaries (flattens multiple rows into 1 row)
+            Direct innerHTML preserves the exact HTML structure. We disconnect
+            Quill's MutationObserver during the write so it doesn't process
+            the change and strip tables it doesn't understand. ── */
       if (expectedImgs > 0 || expectedCells > 0) {
-        /* FAST PATH: Use safeSetInnerHTML which disconnects Quill's
-           MutationObserver before setting innerHTML and reconnects after.
-           This prevents Quill from stripping tables or corrupting images. */
-        safeSetInnerHTML(html);
+        /* Disconnect the observer so the innerHTML mutation is not processed.
+           When we reconnect via observe() below, the observer starts fresh
+           from the new DOM state — pending mutations from disconnect time
+           are DISCARDED per the MutationObserver spec. */
+        var _obs = null;
+        try { _obs = quill.scroll && quill.scroll.observer; } catch(e) {}
+        if (_obs) {
+          try { _obs.disconnect(); } catch(e) {}
+        }
+
+        quill.root.innerHTML = html;
+
+        /* Reconnect observer with the same config Quill uses internally.
+           This way, future user edits are still tracked, but the innerHTML
+           change we just made is invisible to Quill. */
+        if (_obs) {
+          try {
+            _obs.observe(quill.scroll.domNode, {
+              attributes: true,
+              attributeOldValue: true,
+              characterData: true,
+              characterDataOldValue: true,
+              childList: true,
+              subtree: true
+            });
+          } catch(e) {}
+        }
+        /* Do NOT call quill.update('silent') — it re-processes the DOM through
+           Quill's blot system, which corrupts tables (flattens rows) and image
+           srcs (sanitizes long base64 URLs). Quill's internal model will be
+           out of sync but that's acceptable: saves use quill.root.innerHTML
+           directly, and user edits work because the observer is reconnected. */
       } else {
-        /* No images and no tables — safe to use delta path for text-only content */
-        var delta = quill.clipboard.convert({html: html});
+        /* No images or tables — safe to use the delta path for better model sync */
+
+        var tmp = document.createElement('div');
+        tmp.innerHTML = html;
+        var delta = quill.clipboard.convert({html: tmp.innerHTML});
         quill.setContents(delta, 'silent');
       }
 
-      /* Final image integrity check */
+      /* Final image integrity check: verify no image has a broken/placeholder src.
+         This catches any edge case regardless of which path was taken. */
       if (expectedImgs > 0) {
         var allEditorImgs = quill.root.querySelectorAll('img');
         var hasBrokenImg = false;
@@ -5401,7 +5400,7 @@
           }
         });
         if (hasBrokenImg) {
-          safeSetInnerHTML(html);
+          quill.root.innerHTML = html;
         }
       }
 
