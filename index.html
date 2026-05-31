@@ -3901,6 +3901,54 @@
         positionFloatBar(cell);
       }
 
+      /* ── Multi-row / multi-column Shift+click selection ──
+         Anchor tracks the first row/col clicked; Shift+click extends
+         the selection to cover the range from anchor to clicked row/col. */
+      var _selAnchorRowIdx = -1;
+      var _selAnchorColIdx = -1;
+      var _selAnchorTable = null;
+
+      function selectRowRange(table, fromIdx, toIdx) {
+        clearTableSelection();
+        selectionMode = 'row';
+        var rows = table.querySelectorAll('tr');
+        var minIdx = Math.min(fromIdx, toIdx);
+        var maxIdx = Math.max(fromIdx, toIdx);
+        rows.forEach(function(r, i) {
+          if (i >= minIdx && i <= maxIdx) {
+            Array.from(r.querySelectorAll('td, th')).forEach(function(c) {
+              c.classList.add('tbl-sel');
+              selectedRowCells.push(c);
+            });
+          }
+        });
+        var targetRow = rows[toIdx];
+        if (targetRow) {
+          ctxTargetCell = targetRow.querySelector('td, th');
+          if (ctxTargetCell) positionFloatBar(ctxTargetCell);
+        }
+      }
+
+      function selectColRange(table, fromIdx, toIdx) {
+        clearTableSelection();
+        selectionMode = 'col';
+        var minIdx = Math.min(fromIdx, toIdx);
+        var maxIdx = Math.max(fromIdx, toIdx);
+        table.querySelectorAll('tr').forEach(function(r) {
+          Array.from(r.children).forEach(function(c, i) {
+            if (i >= minIdx && i <= maxIdx) {
+              c.classList.add('tbl-sel');
+              selectedColCells.push(c);
+            }
+          });
+        });
+        var firstRow = table.querySelector('tr');
+        if (firstRow && firstRow.children[toIdx]) {
+          ctxTargetCell = firstRow.children[toIdx];
+          positionFloatBar(ctxTargetCell);
+        }
+      }
+
       /* Returns all "active" cells: if row/col/range is selected, those cells;
          otherwise just the single focused cell. Used by alignment, fill, etc. */
       function _getActiveCells() {
@@ -4067,6 +4115,27 @@
         }
       });
 
+      /* Cursor hint: show pointer when hovering over selectable row/col edges */
+      quill.root.addEventListener('mousemove', function(ev) {
+        if (_isDraggingCells) return; /* don't interfere with drag */
+        var hCell = ev.target.closest('td, th');
+        if (!hCell) return;
+        var hTable = hCell.closest('table');
+        var hRow = hCell.closest('tr');
+        if (!hTable || !hRow) return;
+        var hRect = hCell.getBoundingClientRect();
+        var isFirstCol = hRow.children[0] === hCell;
+        var firstR = hTable.querySelector('tr');
+        var isFirstRow = firstR === hRow;
+        if (isFirstCol && (ev.clientX - hRect.left) < 14) {
+          hCell.style.cursor = 'pointer';
+        } else if (isFirstRow && (ev.clientY - hRect.top) < 14) {
+          hCell.style.cursor = 'pointer';
+        } else {
+          hCell.style.cursor = '';
+        }
+      });
+
       var _justFinishedDrag = false;
       document.addEventListener('mouseup', function() {
         if (_isDraggingCells && _rangeCells.length > 0) {
@@ -4089,20 +4158,39 @@
           var table = cell.closest('table');
           var row = cell.closest('tr');
 
-          /* Click on LEFT edge of first-column cell → select entire row */
+          /* Click on LEFT edge of first-column cell → select entire row
+             Shift+click → extend selection to multiple rows */
           var isFirstCol = row && row.children[0] === cell;
-          if (isFirstCol && (e.clientX - cellRect.left) < 10) {
+          if (isFirstCol && (e.clientX - cellRect.left) < 14) {
             e.preventDefault();
-            selectRow(cell);
+            var allRows = Array.from(table.querySelectorAll('tr'));
+            var clickedRowIdx = allRows.indexOf(row);
+            if (e.shiftKey && selectionMode === 'row' && _selAnchorRowIdx >= 0 && _selAnchorTable === table) {
+              selectRowRange(table, _selAnchorRowIdx, clickedRowIdx);
+            } else {
+              selectRow(cell);
+              _selAnchorRowIdx = clickedRowIdx;
+              _selAnchorColIdx = -1;
+              _selAnchorTable = table;
+            }
             return;
           }
 
-          /* Click on TOP edge of first-row cell → select entire column */
+          /* Click on TOP edge of first-row cell → select entire column
+             Shift+click → extend selection to multiple columns */
           var firstRowOfTable = table ? table.querySelector('tr') : null;
           var isFirstRow = firstRowOfTable && firstRowOfTable === row;
-          if (isFirstRow && (e.clientY - cellRect.top) < 10) {
+          if (isFirstRow && (e.clientY - cellRect.top) < 14) {
             e.preventDefault();
-            selectCol(cell);
+            var clickedColIdx = Array.from(row.children).indexOf(cell);
+            if (e.shiftKey && selectionMode === 'col' && _selAnchorColIdx >= 0 && _selAnchorTable === table) {
+              selectColRange(table, _selAnchorColIdx, clickedColIdx);
+            } else {
+              selectCol(cell);
+              _selAnchorColIdx = clickedColIdx;
+              _selAnchorRowIdx = -1;
+              _selAnchorTable = table;
+            }
             return;
           }
 
@@ -4137,8 +4225,10 @@
         }
       });
 
-      /* Keyboard: Delete/Backspace removes selected row, column, or clears range cells */
+      /* Keyboard: Delete/Backspace removes selected row, column, or clears range cells.
+         Also protects tables from accidental deletion when cursor is adjacent. */
       quill.root.addEventListener('keydown', function(e) {
+        /* ── Selection-mode delete (row/col/range already highlighted) ── */
         if (selectionMode && (e.key === 'Delete' || e.key === 'Backspace')) {
           e.preventDefault();
           e.stopImmediatePropagation();
@@ -4147,13 +4237,63 @@
           } else if (selectionMode === 'col') {
             execTableAction('deleteCol');
           } else if (selectionMode === 'range' && _rangeCells.length) {
-            /* Clear content of all range-selected cells */
             _rangeCells.forEach(function(c) { c.innerHTML = '<br>'; });
             if (typeof saveCurrentNote === 'function') saveCurrentNote();
           }
           clearTableSelection();
           return;
         }
+
+        /* ── Table deletion protection ── */
+        if (e.key === 'Backspace' || e.key === 'Delete') {
+          var sel = window.getSelection();
+          var anchorNode = sel && sel.anchorNode;
+          var anchorEl = anchorNode ? (anchorNode.nodeType === 3 ? anchorNode.parentElement : anchorNode) : null;
+          var insideCell = anchorEl ? anchorEl.closest('td, th') : null;
+
+          /* Case 1: Cursor is inside a table cell — let native contenteditable
+             handle the delete; stop Quill from interfering. */
+          if (insideCell && insideCell.closest('table')) {
+            e.stopImmediatePropagation();
+            return; /* browser handles the cell editing */
+          }
+
+          /* Case 2: A text range is selected that spans across a table — block it. */
+          if (sel && !sel.isCollapsed) {
+            try {
+              var selRange = sel.getRangeAt(0);
+              var editorTables = quill.root.querySelectorAll('table');
+              for (var ti = 0; ti < editorTables.length; ti++) {
+                if (selRange.intersectsNode(editorTables[ti])) {
+                  e.preventDefault();
+                  e.stopImmediatePropagation();
+                  return;
+                }
+              }
+            } catch (ex) { /* ignore */ }
+          }
+
+          /* Case 3: Cursor adjacent to a table — pressing Backspace/Delete
+             would cause Quill to remove the BlockEmbed. Prevent it. */
+          try {
+            var qRange = quill.getSelection(true);
+            if (qRange && qRange.length === 0) {
+              var checkIdx = (e.key === 'Backspace') ? qRange.index - 1 : qRange.index;
+              if (checkIdx >= 0 && checkIdx < quill.getLength()) {
+                var contents = quill.getContents(checkIdx, 1);
+                if (contents.ops && contents.ops.length > 0) {
+                  var ins = contents.ops[0].insert;
+                  if (ins && typeof ins === 'object' && ins['table-embed'] !== undefined) {
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+                    return;
+                  }
+                }
+              }
+            }
+          } catch (ex2) { /* ignore */ }
+        }
+
         /* Any other key press clears the selection */
         if (selectionMode && e.key !== 'Shift' && e.key !== 'Control' && e.key !== 'Meta' && e.key !== 'Alt') {
           clearTableSelection();
