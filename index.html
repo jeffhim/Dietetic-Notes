@@ -2174,10 +2174,12 @@
 
       var origUpdate = quill.scroll.update.bind(quill.scroll);
       quill.scroll.update = function(mutations, context) {
-        if (mutations && mutations.length) {
+        /* Guard: Quill may call update() with non-array args (string source,
+           undefined, MutationRecord list). Only filter if it's a real array. */
+        if (Array.isArray(mutations) && mutations.length) {
           mutations = mutations.filter(function(m) {
-            if (!m) return false;
-            if (nodeInTable(m.target)) return false;
+            if (!m || typeof m !== 'object') return true;
+            if (m.target && nodeInTable(m.target)) return false;
             if (nodeListHasTable(m.addedNodes)) return false;
             if (nodeListHasTable(m.removedNodes)) return false;
             return true;
@@ -5502,6 +5504,12 @@
 
         quill.root.innerHTML = html;
 
+        /* Remove the ql-blank class so the placeholder ("Start writing your
+           notes…") doesn't float on top of real content. Quill adds ql-blank
+           when its delta model thinks the editor is empty — but since we
+           bypassed the delta model via innerHTML, we must remove it manually. */
+        quill.root.classList.remove('ql-blank');
+
         /* Reconnect observer with the same config Quill uses internally.
            This way, future user edits are still tracked, but the innerHTML
            change we just made is invisible to Quill. */
@@ -5544,6 +5552,7 @@
         });
         if (hasBrokenImg) {
           quill.root.innerHTML = html;
+          quill.root.classList.remove('ql-blank');
         }
       }
 
