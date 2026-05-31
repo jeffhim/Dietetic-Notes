@@ -2109,6 +2109,43 @@
     SizeStyle.whitelist = ['10px','12px','14px','16px','18px','20px','24px','28px','32px','36px'];
     Quill.register(SizeStyle, true);
 
+    /* ═══════════════════════════════════════════════════════════════════════
+       TABLE BLOT — Teach Quill about <table> elements
+       ─────────────────────────────────────────────────────────────────────
+       Quill 2.0.3 ships without a Table module. Without a registered blot,
+       Quill treats <table> as an unknown DOM node and strips it during
+       scroll.update → enforceAllowedChildren. By registering TABLE as a
+       BlockEmbed (opaque block), Quill keeps it in the blot tree and leaves
+       its internal DOM alone. Cell editing works via native contenteditable
+       on each TD/TH — Quill doesn't need to understand the table internals.
+       Saves use quill.root.innerHTML, which captures the full table.
+       ═════════════════════════════════════════════════════════════════════ */
+    (function registerTableBlot() {
+      var BEmbed = Quill.import('blots/block/embed');
+      class TableBlot extends BEmbed {
+        static create(value) {
+          var node = document.createElement('table');
+          if (typeof value === 'string' && value) {
+            node.innerHTML = value;
+          }
+          return node;
+        }
+        static value(node) {
+          return node.innerHTML;
+        }
+        /* Prevent Quill from re-processing table internals when user
+           edits cell content. Mutations inside the table (typing, pasting
+           into cells) should NOT trigger blot-tree updates — the native
+           contenteditable on each TD/TH handles editing, and innerHTML
+           captures the result on save. */
+        update() { /* no-op */ }
+        optimize() { /* no-op */ }
+      }
+      TableBlot.blotName = 'table-embed';
+      TableBlot.tagName = 'TABLE';
+      Quill.register(TableBlot, true);
+    })();
+
     const quill = new Quill('#quill-editor',{
       theme:'snow', placeholder:'Start writing your notes\u2026',
       modules:{
@@ -2129,77 +2166,6 @@
         }
       }}
     });
-
-    /* ═══════════════════════════════════════════════════════════════════════
-       QUILL TABLE-PROTECTION PATCH
-       ─────────────────────────────────────────────────────────────────────
-       Quill 2.0.3 has NO Table blot registered, so its blot system has no
-       idea how to represent <table> elements. When mutations occur (paste,
-       innerHTML write, user typing in cells), Quill's Scroll.update() walks
-       the DOM, finds no blot for the table, and STRIPS or FLATTENS it.
-       Symptoms before this patch:
-         • Pasted table preview looks right but Insert produces nothing
-         • Adding a row to a 2x6 table collapses it to 1 row x N cells
-         • Tables in saved notes load corrupted on reopen
-       Fix: wrap quill.scroll.update so any mutations whose target is inside
-       a <table>, or which add/remove a <table>, are filtered out BEFORE
-       Quill processes them. Quill's delta model won't know about tables
-       (it never did), but the DOM keeps them intact, which is all we need
-       since saves use quill.root.innerHTML directly.
-       ═════════════════════════════════════════════════════════════════════ */
-    (function installTableProtectionPatch() {
-      if (!quill.scroll || typeof quill.scroll.update !== 'function') return;
-
-      function nodeInTable(node) {
-        var n = node;
-        while (n && n !== quill.root && n !== document) {
-          if (n.nodeType === 1 && n.tagName === 'TABLE') return true;
-          n = n.parentNode;
-        }
-        return false;
-      }
-      function nodeListHasTable(list) {
-        if (!list || !list.length) return false;
-        for (var i = 0; i < list.length; i++) {
-          var n = list[i];
-          if (!n || n.nodeType !== 1) continue;
-          if (n.tagName === 'TABLE') return true;
-          if (typeof n.querySelector === 'function' && n.querySelector('table')) return true;
-          /* Also catch table-related children that may appear in isolated mutations */
-          if (n.tagName === 'TR' || n.tagName === 'TD' || n.tagName === 'TH' ||
-              n.tagName === 'THEAD' || n.tagName === 'TBODY' || n.tagName === 'TFOOT') return true;
-        }
-        return false;
-      }
-
-      var origUpdate = quill.scroll.update.bind(quill.scroll);
-      quill.scroll.update = function(mutations, context) {
-        /* Guard: Quill may call update() with non-array args (string source,
-           undefined, MutationRecord list). Only filter if it's a real array. */
-        if (Array.isArray(mutations) && mutations.length) {
-          mutations = mutations.filter(function(m) {
-            if (!m || typeof m !== 'object') return true;
-            if (m.target && nodeInTable(m.target)) return false;
-            if (nodeListHasTable(m.addedNodes)) return false;
-            if (nodeListHasTable(m.removedNodes)) return false;
-            return true;
-          });
-        }
-        try { return origUpdate(mutations, context); }
-        catch(e) { /* swallow — table-related errors must not break the editor */ }
-      };
-
-      /* Also patch optimize so it doesn't try to rebuild blots for table descendants.
-         optimize() walks the blot tree; tables aren't in the blot tree, so this is
-         mostly defensive but cheap. */
-      if (typeof quill.scroll.optimize === 'function') {
-        var origOptimize = quill.scroll.optimize.bind(quill.scroll);
-        quill.scroll.optimize = function(mutations, context) {
-          try { return origOptimize(mutations, context); }
-          catch(e) { /* swallow */ }
-        };
-      }
-    })();
 
     /* ── Editor Zoom (CSS transform — visual only, no layout change) ── */
     var editorZoom = 1.0;
@@ -5479,81 +5445,30 @@
 
       if (!html) { quill.setContents([{insert:'\n'}], 'silent'); if (!keepHistory) quill.getModule('history').clear(); if (edBody) edBody.scrollTop = savedScroll; return; }
 
-      /* Count expected images and table cells so we can verify later */
+      /* Count expected images and table cells */
       var expectedImgs = (html.match(/<img\s/gi) || []).length;
       var expectedCells = (html.match(/<t[dh][\s>]/gi) || []).length;
-      var expectedRows = (html.match(/<tr[\s>]/gi) || []).length;
 
-      /* ── FAST PATH: If HTML contains images OR tables, skip delta conversion.
-            Quill 2.0.3's clipboard.convert() does NOT reliably handle:
-            • base64 data-URL image srcs (gets sanitized/mangled)
-            • Table row boundaries (flattens multiple rows into 1 row)
-            Direct innerHTML preserves the exact HTML structure. We disconnect
-            Quill's MutationObserver during the write so it doesn't process
-            the change and strip tables it doesn't understand. ── */
+      /* ── FAST PATH: If HTML contains images OR tables, use innerHTML
+            instead of clipboard.convert → setContents.
+            clipboard.convert() mangles base64 data-URLs and can't handle
+            tables at all. Direct innerHTML + letting the observer process
+            the change naturally is safe because:
+            • TableBlot (registered above) makes Quill keep <table> elements
+            • Image blot preserves base64 src attributes from DOM nodes
+            After innerHTML, Quill's observer fires asynchronously and
+            rebuilds the blot tree from the new DOM. ── */
       if (expectedImgs > 0 || expectedCells > 0) {
-        /* Disconnect the observer so the innerHTML mutation is not processed.
-           When we reconnect via observe() below, the observer starts fresh
-           from the new DOM state — pending mutations from disconnect time
-           are DISCARDED per the MutationObserver spec. */
-        var _obs = null;
-        try { _obs = quill.scroll && quill.scroll.observer; } catch(e) {}
-        if (_obs) {
-          try { _obs.disconnect(); } catch(e) {}
-        }
-
         quill.root.innerHTML = html;
-
-        /* Remove the ql-blank class so the placeholder ("Start writing your
-           notes…") doesn't float on top of real content. Quill adds ql-blank
-           when its delta model thinks the editor is empty — but since we
-           bypassed the delta model via innerHTML, we must remove it manually. */
+        /* Remove placeholder — Quill re-evaluates after observer fires,
+           but remove it now to avoid a flash of placeholder text. */
         quill.root.classList.remove('ql-blank');
-
-        /* Reconnect observer with the same config Quill uses internally.
-           This way, future user edits are still tracked, but the innerHTML
-           change we just made is invisible to Quill. */
-        if (_obs) {
-          try {
-            _obs.observe(quill.scroll.domNode, {
-              attributes: true,
-              attributeOldValue: true,
-              characterData: true,
-              characterDataOldValue: true,
-              childList: true,
-              subtree: true
-            });
-          } catch(e) {}
-        }
-        /* Do NOT call quill.update('silent') — it re-processes the DOM through
-           Quill's blot system, which corrupts tables (flattens rows) and image
-           srcs (sanitizes long base64 URLs). Quill's internal model will be
-           out of sync but that's acceptable: saves use quill.root.innerHTML
-           directly, and user edits work because the observer is reconnected. */
       } else {
         /* No images or tables — safe to use the delta path for better model sync */
-
         var tmp = document.createElement('div');
         tmp.innerHTML = html;
         var delta = quill.clipboard.convert({html: tmp.innerHTML});
         quill.setContents(delta, 'silent');
-      }
-
-      /* Final image integrity check: verify no image has a broken/placeholder src.
-         This catches any edge case regardless of which path was taken. */
-      if (expectedImgs > 0) {
-        var allEditorImgs = quill.root.querySelectorAll('img');
-        var hasBrokenImg = false;
-        allEditorImgs.forEach(function(img) {
-          var s = img.getAttribute('src') || '';
-          if (!s || s === '//:0' || s.indexOf('data:,IMG') === 0 || (s.length < 30 && s.indexOf('data:') === 0)) {
-            hasBrokenImg = true;
-          }
-        });
-        if (hasBrokenImg) {
-          quill.root.innerHTML = html;
-          quill.root.classList.remove('ql-blank');
-        }
       }
 
       if (!keepHistory) quill.getModule('history').clear();
