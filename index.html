@@ -523,6 +523,16 @@
     .tbl-fb-sel:hover, .tbl-fb-sel:active { background:#EFF6FF; }
     html.dark .tbl-fb-sel:hover, html.dark .tbl-fb-sel:active { background:#1E3A5F; }
     html.dark .tbl-fb-danger:hover, html.dark .tbl-fb-danger:active { background:#3B1A1A; }
+    /* Fill color picker */
+    .tbl-fill-wrap { position:relative; }
+    .tbl-fill-picker { display:none; position:absolute; top:100%; left:50%; transform:translateX(-50%); z-index:200; background:#fff; border:1px solid #CBD5E1; border-radius:8px; padding:6px; box-shadow:0 4px 16px rgba(0,0,0,0.18); margin-top:4px; }
+    .tbl-fill-picker.active { display:grid; grid-template-columns:repeat(6,28px); gap:3px; }
+    .tbl-fill-swatch { width:28px; height:28px; border-radius:5px; border:2px solid transparent; cursor:pointer; transition:border-color .1s, transform .1s; }
+    .tbl-fill-swatch:hover { border-color:#14B8A6; transform:scale(1.15); }
+    .tbl-fill-swatch.no-fill { background:repeating-conic-gradient(#ddd 0% 25%, #fff 0% 50%) 50% / 12px 12px; position:relative; }
+    .tbl-fill-swatch.no-fill::after { content:'✕'; position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:#EF4444; font-size:14px; font-weight:700; }
+    html.dark .tbl-fill-picker { background:#1E293B; border-color:#334155; }
+    html.dark .tbl-fill-swatch.no-fill { background:repeating-conic-gradient(#475569 0% 25%, #1E293B 0% 50%) 50% / 12px 12px; }
     /* Row / column selection highlighting */
     .ql-editor table td.tbl-sel, .ql-editor table th.tbl-sel { background:rgba(45,212,191,0.15) !important; outline:2px solid rgba(45,212,191,0.5); outline-offset:-2px; }
     html.dark .ql-editor table td.tbl-sel, html.dark .ql-editor table th.tbl-sel { background:rgba(45,212,191,0.12) !important; outline-color:rgba(45,212,191,0.4); }
@@ -753,8 +763,13 @@
     <button class="tbl-fb-btn tbl-fb-align" data-action="alignCenter" title="Align center"><i class="fas fa-align-center"></i></button>
     <button class="tbl-fb-btn tbl-fb-align" data-action="alignRight" title="Align right"><i class="fas fa-align-right"></i></button>
     <div class="tbl-fb-sep"></div>
-    <button class="tbl-fb-btn tbl-fb-sel" data-action="selectRow" title="Select row (then press Delete)"><i class="fas fa-grip-lines"></i><span>Sel</span></button>
-    <button class="tbl-fb-btn tbl-fb-sel" data-action="selectCol" title="Select column (then press Delete)"><i class="fas fa-grip-lines-vertical"></i><span>Sel</span></button>
+    <div class="tbl-fill-wrap">
+      <button class="tbl-fb-btn" data-action="fillColor" title="Cell fill color"><i class="fas fa-fill-drip"></i><span>Fill</span></button>
+      <div class="tbl-fill-picker" id="tbl-fill-picker"></div>
+    </div>
+    <div class="tbl-fb-sep"></div>
+    <button class="tbl-fb-btn tbl-fb-sel" data-action="selectRow" title="Select row"><i class="fas fa-grip-lines"></i><span>Row</span></button>
+    <button class="tbl-fb-btn tbl-fb-sel" data-action="selectCol" title="Select column"><i class="fas fa-grip-lines-vertical"></i><span>Col</span></button>
     <div class="tbl-fb-sep"></div>
     <button class="tbl-fb-btn tbl-fb-danger" data-action="deleteRow" title="Delete row"><i class="fas fa-minus"></i><span>Row</span></button>
     <button class="tbl-fb-btn tbl-fb-danger" data-action="deleteCol" title="Delete column"><i class="fas fa-columns"></i><span>Col</span></button>
@@ -3576,10 +3591,11 @@
           return;
         }
 
-        /* Cell alignment — simple in-place style change, no rebuild needed */
+        /* Cell alignment — apply to selected cells OR single cell */
         if (action === 'alignLeft' || action === 'alignCenter' || action === 'alignRight') {
           var alignVal = action === 'alignLeft' ? 'left' : (action === 'alignCenter' ? 'center' : 'right');
-          ctxTargetCell.style.textAlign = alignVal;
+          var alignCells = _getActiveCells();
+          alignCells.forEach(function(c) { c.style.textAlign = alignVal; });
           /* Update alignment button states */
           if (floatBar) {
             floatBar.querySelectorAll('.tbl-fb-align').forEach(function(btn) {
@@ -3589,6 +3605,12 @@
           }
           if (saveTimer) clearTimeout(saveTimer);
           saveCurrentNote();
+          return;
+        }
+
+        /* Fill color — handled by picker, but the action toggles the picker */
+        if (action === 'fillColor') {
+          _toggleFillPicker();
           return;
         }
 
@@ -3803,7 +3825,11 @@
         quill.root.querySelectorAll('.tbl-sel').forEach(function(c) { c.classList.remove('tbl-sel'); });
         selectedRowCells = [];
         selectedColCells = [];
+        _rangeCells = [];
         selectionMode = '';
+        /* Close fill picker if open */
+        var fp = document.getElementById('tbl-fill-picker');
+        if (fp) fp.classList.remove('active');
       }
 
       function selectRow(cell) {
@@ -3833,8 +3859,148 @@
         positionFloatBar(cell);
       }
 
+      /* Returns all "active" cells: if row/col/range is selected, those cells;
+         otherwise just the single focused cell. Used by alignment, fill, etc. */
+      function _getActiveCells() {
+        if (selectionMode === 'row' && selectedRowCells.length) return selectedRowCells;
+        if (selectionMode === 'col' && selectedColCells.length) return selectedColCells;
+        if (selectionMode === 'range' && _rangeCells.length) return _rangeCells;
+        return ctxTargetCell ? [ctxTargetCell] : [];
+      }
+
+      /* ── Cell fill color picker ── */
+      var _fillColors = [
+        '', /* no fill (remove) */
+        '#FECACA','#FDE68A','#BBF7D0','#BAE6FD','#DDD6FE','#FBCFE8',
+        '#FCA5A5','#FCD34D','#86EFAC','#7DD3FC','#C4B5FD','#F9A8D4',
+        '#EF4444','#F59E0B','#22C55E','#3B82F6','#8B5CF6','#EC4899',
+        '#B91C1C','#D97706','#15803D','#1D4ED8','#6D28D9','#BE185D',
+        '#FFFFFF','#F1F5F9','#CBD5E1','#94A3B8','#475569','#1E293B'
+      ];
+      var fillPicker = document.getElementById('tbl-fill-picker');
+      (function buildFillPicker() {
+        if (!fillPicker) return;
+        _fillColors.forEach(function(color, i) {
+          var swatch = document.createElement('div');
+          swatch.className = 'tbl-fill-swatch' + (i === 0 ? ' no-fill' : '');
+          if (color) swatch.style.backgroundColor = color;
+          swatch.dataset.color = color;
+          swatch.addEventListener('click', function(e) {
+            e.stopPropagation();
+            var cells = _getActiveCells();
+            cells.forEach(function(c) {
+              if (color) {
+                c.style.backgroundColor = color;
+              } else {
+                c.style.removeProperty('background-color');
+              }
+            });
+            fillPicker.classList.remove('active');
+            if (typeof saveCurrentNote === 'function') saveCurrentNote();
+          });
+          fillPicker.appendChild(swatch);
+        });
+      })();
+
+      function _toggleFillPicker() {
+        if (!fillPicker) return;
+        fillPicker.classList.toggle('active');
+      }
+      /* Close fill picker when clicking elsewhere */
+      document.addEventListener('click', function(e) {
+        if (fillPicker && fillPicker.classList.contains('active') &&
+            !e.target.closest('.tbl-fill-wrap')) {
+          fillPicker.classList.remove('active');
+        }
+      });
+
+      /* ── Mouse drag cell range selection ──
+         Mousedown on a cell + drag to another cell = select the rectangular
+         region of cells between them. Works for rows, columns, or arbitrary blocks. */
+      var _dragStartCell = null;
+      var _dragTable = null;
+      var _isDraggingCells = false;
+      var _rangeCells = [];
+
+      function _getCellCoords(cell, table) {
+        var rows = Array.from(table.querySelectorAll('tr'));
+        for (var r = 0; r < rows.length; r++) {
+          var cols = Array.from(rows[r].children);
+          for (var c = 0; c < cols.length; c++) {
+            if (cols[c] === cell) return { row: r, col: c };
+          }
+        }
+        return null;
+      }
+
+      function _selectCellRange(table, startCoords, endCoords) {
+        clearTableSelection();
+        selectionMode = 'range';
+        _rangeCells = [];
+        var r1 = Math.min(startCoords.row, endCoords.row);
+        var r2 = Math.max(startCoords.row, endCoords.row);
+        var c1 = Math.min(startCoords.col, endCoords.col);
+        var c2 = Math.max(startCoords.col, endCoords.col);
+        var rows = Array.from(table.querySelectorAll('tr'));
+        for (var r = r1; r <= r2; r++) {
+          if (!rows[r]) continue;
+          var cols = rows[r].children;
+          for (var c = c1; c <= c2; c++) {
+            if (cols[c]) {
+              cols[c].classList.add('tbl-sel');
+              _rangeCells.push(cols[c]);
+            }
+          }
+        }
+      }
+
+      quill.root.addEventListener('mousedown', function(e) {
+        var cell = e.target.closest('td, th');
+        if (!cell) { _dragStartCell = null; return; }
+        var table = cell.closest('table');
+        if (!table) return;
+        _dragStartCell = cell;
+        _dragTable = table;
+        _isDraggingCells = false;
+      });
+
+      quill.root.addEventListener('mousemove', function(e) {
+        if (!_dragStartCell || !_dragTable) return;
+        if (e.buttons !== 1) { _dragStartCell = null; return; } /* no button held */
+        var cell = e.target.closest('td, th');
+        if (!cell || cell === _dragStartCell) {
+          if (!_isDraggingCells) return; /* haven't started dragging yet */
+        }
+        if (!cell || cell.closest('table') !== _dragTable) return;
+
+        /* User has dragged from one cell to another — start range selection */
+        _isDraggingCells = true;
+        e.preventDefault(); /* prevent text selection during cell drag */
+        var startCoords = _getCellCoords(_dragStartCell, _dragTable);
+        var endCoords = _getCellCoords(cell, _dragTable);
+        if (startCoords && endCoords) {
+          _selectCellRange(_dragTable, startCoords, endCoords);
+          ctxTargetCell = _dragStartCell;
+          positionFloatBar(_dragStartCell);
+        }
+      });
+
+      var _justFinishedDrag = false;
+      document.addEventListener('mouseup', function() {
+        if (_isDraggingCells && _rangeCells.length > 0) {
+          /* Keep the range selection active — flag so click handler doesn't clear it */
+          _justFinishedDrag = true;
+          setTimeout(function() { _justFinishedDrag = false; }, 50);
+        }
+        _dragStartCell = null;
+        _isDraggingCells = false;
+      });
+
       /* Listen for clicks on editor — detect edge clicks for row/col selection */
       quill.root.addEventListener('click', function(e) {
+        /* If we just finished a drag selection, don't process the click */
+        if (_justFinishedDrag) return;
+
         var cell = e.target.closest('td, th');
         if (cell) {
           var cellRect = cell.getBoundingClientRect();
@@ -3889,7 +4055,7 @@
         }
       });
 
-      /* Keyboard: Delete/Backspace removes selected row or column */
+      /* Keyboard: Delete/Backspace removes selected row, column, or clears range cells */
       quill.root.addEventListener('keydown', function(e) {
         if (selectionMode && (e.key === 'Delete' || e.key === 'Backspace')) {
           e.preventDefault();
@@ -3898,6 +4064,10 @@
             execTableAction('deleteRow');
           } else if (selectionMode === 'col') {
             execTableAction('deleteCol');
+          } else if (selectionMode === 'range' && _rangeCells.length) {
+            /* Clear content of all range-selected cells */
+            _rangeCells.forEach(function(c) { c.innerHTML = '<br>'; });
+            if (typeof saveCurrentNote === 'function') saveCurrentNote();
           }
           clearTableSelection();
           return;
@@ -4265,11 +4435,8 @@
          and apply formatting directly via browser Selection + execCommand. */
       var _origQuillFormat = quill.format.bind(quill);
       quill.format = function(name, value, source) {
-        var cells = [];
-        if (selectionMode === 'row' && selectedRowCells.length) cells = selectedRowCells;
-        else if (selectionMode === 'col' && selectedColCells.length) cells = selectedColCells;
-
-        if (cells.length > 0) {
+        var cells = _getActiveCells();
+        if (selectionMode && cells.length > 0) {
           _applyFormatToSelectedCells(cells, name, value);
           return;
         }
