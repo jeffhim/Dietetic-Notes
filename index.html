@@ -523,15 +523,19 @@
     .tbl-fb-sel:hover, .tbl-fb-sel:active { background:#EFF6FF; }
     html.dark .tbl-fb-sel:hover, html.dark .tbl-fb-sel:active { background:#1E3A5F; }
     html.dark .tbl-fb-danger:hover, html.dark .tbl-fb-danger:active { background:#3B1A1A; }
-    /* Fill color picker */
+    /* Fill color picker — global floating bubble */
     .tbl-fill-wrap { position:relative; }
-    .tbl-fill-picker { display:none; position:absolute; top:100%; left:50%; transform:translateX(-50%); z-index:200; background:#fff; border:1px solid #CBD5E1; border-radius:8px; padding:6px; box-shadow:0 4px 16px rgba(0,0,0,0.18); margin-top:4px; }
-    .tbl-fill-picker.active { display:grid; grid-template-columns:repeat(6,28px); gap:3px; }
-    .tbl-fill-swatch { width:28px; height:28px; border-radius:5px; border:2px solid transparent; cursor:pointer; transition:border-color .1s, transform .1s; }
-    .tbl-fill-swatch:hover { border-color:#14B8A6; transform:scale(1.15); }
+    #global-fill-picker { display:none; position:fixed; z-index:9999; background:#fff; border:1px solid #CBD5E1; border-radius:10px; padding:8px; box-shadow:0 6px 24px rgba(0,0,0,0.22); }
+    #global-fill-picker.active { display:grid; grid-template-columns:repeat(6,30px); gap:4px; animation:scaleIn .12s ease; }
+    #global-fill-picker::before { content:''; position:absolute; width:12px; height:12px; background:#fff; border:1px solid #CBD5E1; border-right:none; border-bottom:none; transform:rotate(45deg); }
+    #global-fill-picker.arrow-bottom::before { bottom:-7px; left:calc(50% - 6px); transform:rotate(-135deg); }
+    #global-fill-picker.arrow-top::before { top:-7px; left:calc(50% - 6px); transform:rotate(45deg); border:1px solid #CBD5E1; border-right:none; border-bottom:none; }
+    .tbl-fill-swatch { width:30px; height:30px; border-radius:6px; border:2px solid transparent; cursor:pointer; transition:border-color .1s, transform .1s; }
+    .tbl-fill-swatch:hover { border-color:#14B8A6; transform:scale(1.12); }
     .tbl-fill-swatch.no-fill { background:repeating-conic-gradient(#ddd 0% 25%, #fff 0% 50%) 50% / 12px 12px; position:relative; }
     .tbl-fill-swatch.no-fill::after { content:'✕'; position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:#EF4444; font-size:14px; font-weight:700; }
-    html.dark .tbl-fill-picker { background:#1E293B; border-color:#334155; }
+    html.dark #global-fill-picker { background:#1E293B; border-color:#475569; }
+    html.dark #global-fill-picker::before { background:#1E293B; border-color:#475569; }
     html.dark .tbl-fill-swatch.no-fill { background:repeating-conic-gradient(#475569 0% 25%, #1E293B 0% 50%) 50% / 12px 12px; }
     /* Row / column selection highlighting */
     .ql-editor table td.tbl-sel, .ql-editor table th.tbl-sel { background:rgba(45,212,191,0.15) !important; outline:2px solid rgba(45,212,191,0.5); outline-offset:-2px; }
@@ -543,6 +547,9 @@
     /* Custom table toolbar button */
     .ql-table-insert { position:relative; }
     .ql-toolbar .ql-table-insert svg { width:18px; height:18px; }
+    /* Cell fill button in main toolbar */
+    .ql-cell-fill { position:relative; }
+    .ql-cell-fill::after { content:'\f575'; font-family:'Font Awesome 6 Free'; font-weight:900; font-size:14px; }
 
 
     /* Quill tooltip (edit existing links) */
@@ -765,7 +772,6 @@
     <div class="tbl-fb-sep"></div>
     <div class="tbl-fill-wrap">
       <button class="tbl-fb-btn" data-action="fillColor" title="Cell fill color"><i class="fas fa-fill-drip"></i><span>Fill</span></button>
-      <div class="tbl-fill-picker" id="tbl-fill-picker"></div>
     </div>
     <div class="tbl-fb-sep"></div>
     <button class="tbl-fb-btn tbl-fb-sel" data-action="selectRow" title="Select row"><i class="fas fa-grip-lines"></i><span>Row</span></button>
@@ -797,6 +803,8 @@
     <div class="tbl-ctx-item danger" data-action="deleteTable"><i class="fas fa-trash"></i>Delete table</div>
   </div>
 
+  <!-- Global floating fill color picker (used by both main toolbar and table floating bar) -->
+  <div id="global-fill-picker"></div>
 
   <!-- NEW NOTE DIALOG -->
   <div class="newnote-overlay" id="newnote-overlay">
@@ -2172,7 +2180,8 @@
           [{script:'sub'},{script:'super'}],
           [{color:[]},{background:[]}],[{list:'ordered'},{list:'bullet'}],
           [{indent:'-1'},{indent:'+1'}],
-          ['blockquote','code-block'],['link','image'],['table-insert'],['clean'],
+          [{align:[false,'center','right']}],
+          ['blockquote','code-block'],['link','image'],['table-insert'],['cell-fill'],['clean'],
           ['undo','redo']
         ],
         handlers:{
@@ -2345,6 +2354,39 @@
 
       /* ── Table insert button: replace Quill default with SVG icon ── */
       toolbar.addHandler('table-insert', function() { /* handled by click below */ });
+
+      /* ── Cell fill button in main toolbar ── */
+      toolbar.addHandler('cell-fill', function() {
+        _showGlobalFillPicker(document.querySelector('.ql-cell-fill'));
+      });
+
+      /* ── Alignment: intercept for table cells ──
+         When alignment is changed while a table cell is active, apply to the cell(s)
+         via style.textAlign instead of Quill's block format. */
+      toolbar.addHandler('align', function(value) {
+        /* Check if cursor is inside a table cell */
+        var sel = window.getSelection();
+        var node = sel && sel.anchorNode;
+        var el = node ? (node.nodeType === 3 ? node.parentElement : node) : null;
+        var cell = el ? el.closest('td, th') : null;
+
+        /* Also check if there's an active table selection */
+        var tblIIFE = document.querySelector('.tbl-sel');
+        if (cell || tblIIFE) {
+          var alignVal = value || 'left';
+          /* Get active cells from the table IIFE via the global helper */
+          if (window._tblGetActiveCells) {
+            var cells = window._tblGetActiveCells();
+            cells.forEach(function(c) { c.style.textAlign = alignVal; });
+          } else if (cell) {
+            cell.style.textAlign = alignVal;
+          }
+          if (typeof saveCurrentNote === 'function') saveCurrentNote();
+          return;
+        }
+        /* Normal Quill alignment for non-table content */
+        quill.format('align', value, 'user');
+      });
 
       /* ── Undo / Redo (bypass Quill toolbar handler — clone buttons for direct listeners) ── */
       var histMod = quill.getModule('history');
@@ -3868,7 +3910,9 @@
         return ctxTargetCell ? [ctxTargetCell] : [];
       }
 
-      /* ── Cell fill color picker ── */
+      /* ── Global floating fill color picker ──
+         Shared by both the table floating toolbar and the main toolbar.
+         Positioned as a bubble near the clicked button — never requires scrolling. */
       var _fillColors = [
         '', /* no fill (remove) */
         '#FECACA','#FDE68A','#BBF7D0','#BAE6FD','#DDD6FE','#FBCFE8',
@@ -3877,9 +3921,9 @@
         '#B91C1C','#D97706','#15803D','#1D4ED8','#6D28D9','#BE185D',
         '#FFFFFF','#F1F5F9','#CBD5E1','#94A3B8','#475569','#1E293B'
       ];
-      var fillPicker = document.getElementById('tbl-fill-picker');
-      (function buildFillPicker() {
-        if (!fillPicker) return;
+      var gFillPicker = document.getElementById('global-fill-picker');
+      (function buildGlobalFillPicker() {
+        if (!gFillPicker) return;
         _fillColors.forEach(function(color, i) {
           var swatch = document.createElement('div');
           swatch.className = 'tbl-fill-swatch' + (i === 0 ? ' no-fill' : '');
@@ -3895,22 +3939,60 @@
                 c.style.removeProperty('background-color');
               }
             });
-            fillPicker.classList.remove('active');
+            gFillPicker.classList.remove('active', 'arrow-top', 'arrow-bottom');
             if (typeof saveCurrentNote === 'function') saveCurrentNote();
           });
-          fillPicker.appendChild(swatch);
+          gFillPicker.appendChild(swatch);
         });
       })();
 
+      /* Show fill picker as floating bubble near a button element */
+      window._showGlobalFillPicker = function(anchorEl) {
+        if (!gFillPicker || !anchorEl) return;
+        /* Toggle off if already open */
+        if (gFillPicker.classList.contains('active')) {
+          gFillPicker.classList.remove('active', 'arrow-top', 'arrow-bottom');
+          return;
+        }
+        /* Calculate position: prefer ABOVE the button, fall back to BELOW */
+        var rect = anchorEl.getBoundingClientRect();
+        var pickerW = 6 * 30 + 5 * 4 + 16; /* 6 cols × 30px + 5 gaps × 4px + padding */
+        var pickerH = 5 * 30 + 4 * 4 + 16; /* 5 rows × 30px + 4 gaps × 4px + padding */
+        var left = rect.left + rect.width / 2 - pickerW / 2;
+        /* Clamp to screen */
+        if (left < 8) left = 8;
+        if (left + pickerW > window.innerWidth - 8) left = window.innerWidth - pickerW - 8;
+        var spaceAbove = rect.top;
+        var spaceBelow = window.innerHeight - rect.bottom;
+        var top, arrowClass;
+        if (spaceAbove > pickerH + 12) {
+          /* Place above */
+          top = rect.top - pickerH - 10;
+          arrowClass = 'arrow-bottom';
+        } else {
+          /* Place below */
+          top = rect.bottom + 10;
+          arrowClass = 'arrow-top';
+        }
+        gFillPicker.style.left = left + 'px';
+        gFillPicker.style.top = top + 'px';
+        gFillPicker.className = 'active ' + arrowClass;
+        gFillPicker.id = 'global-fill-picker';
+      };
+
       function _toggleFillPicker() {
-        if (!fillPicker) return;
-        fillPicker.classList.toggle('active');
+        /* Called from the table floating bar's Fill button */
+        var fillBtn = document.querySelector('.tbl-fill-wrap .tbl-fb-btn');
+        window._showGlobalFillPicker(fillBtn);
       }
+
       /* Close fill picker when clicking elsewhere */
       document.addEventListener('click', function(e) {
-        if (fillPicker && fillPicker.classList.contains('active') &&
-            !e.target.closest('.tbl-fill-wrap')) {
-          fillPicker.classList.remove('active');
+        if (gFillPicker && gFillPicker.classList.contains('active') &&
+            !e.target.closest('#global-fill-picker') &&
+            !e.target.closest('.tbl-fill-wrap') &&
+            !e.target.closest('.ql-cell-fill')) {
+          gFillPicker.classList.remove('active', 'arrow-top', 'arrow-bottom');
         }
       });
 
@@ -4427,6 +4509,7 @@
 
       /* Expose to global scope so loadNoteHTML can call these */
       window._tblMakeCellsEditable = makeTableCellsEditable;
+      window._tblGetActiveCells = _getActiveCells;
 
       /* ── Toolbar formatting for table row/column selections ──
          When a row or column is selected (via selectRow/selectCol), Quill's
