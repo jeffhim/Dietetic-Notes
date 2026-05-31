@@ -4258,6 +4258,86 @@
       /* Expose to global scope so loadNoteHTML can call these */
       window._tblMakeCellsEditable = makeTableCellsEditable;
 
+      /* ── Toolbar formatting for table row/column selections ──
+         When a row or column is selected (via selectRow/selectCol), Quill's
+         toolbar buttons don't work because the selection is CSS-based, not a
+         Quill selection. Fix: override quill.format to detect table selections
+         and apply formatting directly via browser Selection + execCommand. */
+      var _origQuillFormat = quill.format.bind(quill);
+      quill.format = function(name, value, source) {
+        var cells = [];
+        if (selectionMode === 'row' && selectedRowCells.length) cells = selectedRowCells;
+        else if (selectionMode === 'col' && selectedColCells.length) cells = selectedColCells;
+
+        if (cells.length > 0) {
+          _applyFormatToSelectedCells(cells, name, value);
+          return;
+        }
+        return _origQuillFormat(name, value, source);
+      };
+
+      function _applyFormatToSelectedCells(cells, name, value) {
+        /* Map Quill format names → execCommand commands */
+        var cmdMap = {
+          'color': 'foreColor',
+          'background': 'hiliteColor',
+          'bold': 'bold',
+          'italic': 'italic',
+          'underline': 'underline',
+          'strike': 'strikeThrough'
+        };
+        var cmd = cmdMap[name];
+        if (!cmd) return; /* unsupported format for table cells */
+
+        cells.forEach(function(cell) {
+          /* Skip empty cells */
+          if (!cell.textContent || !cell.textContent.trim()) return;
+
+          /* Select all content in this cell */
+          var range = document.createRange();
+          range.selectNodeContents(cell);
+          var sel = window.getSelection();
+          sel.removeAllRanges();
+          sel.addRange(range);
+
+          /* Apply via execCommand — works inside contenteditable cells */
+          if (name === 'color' || name === 'background') {
+            if (value) {
+              document.execCommand(cmd, false, value);
+            } else {
+              document.execCommand('removeFormat', false, null);
+            }
+          } else {
+            /* Toggle formats (bold, italic, underline, strike) */
+            document.execCommand(cmd, false, null);
+          }
+        });
+
+        /* Re-apply visual table selection (execCommand may have altered it) */
+        cells.forEach(function(c) { c.classList.add('tbl-sel'); });
+
+        /* Clear browser text selection so it doesn't look messy */
+        try { window.getSelection().removeAllRanges(); } catch(e) {}
+
+        /* Save */
+        if (typeof scheduleSave === 'function') scheduleSave({}, {}, 'user');
+        else if (typeof saveCurrentNote === 'function') saveCurrentNote();
+      }
+
+      /* Prevent toolbar clicks from clearing table selection.
+         When mousedown fires on the toolbar while cells are selected,
+         prevent default so focus stays and the selection persists. */
+      var qlToolbar = document.querySelector('.ql-toolbar');
+      if (qlToolbar) {
+        qlToolbar.addEventListener('mousedown', function(e) {
+          if (selectionMode) {
+            /* Don't prevent on color picker / dropdown items — they need click */
+            /* But DO prevent focus shift */
+            e.preventDefault();
+          }
+        });
+      }
+
     })();
 
     function showLinkDialog(existingUrl, existingText, onDone) {
