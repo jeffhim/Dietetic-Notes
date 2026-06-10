@@ -6148,23 +6148,40 @@
 
         /* Build full HTML string — html2pdf will create its own
            temporary container, append it on-screen, and capture it.
-           This avoids all off-screen / opacity / z-index issues. */
-        var cleanContent = editorContent;
+           This avoids all off-screen / opacity / z-index issues.
+           Uses Nunito font (already loaded via Google Fonts link) and
+           preserves the teal section separator lines under h2 headings. */
 
         /* Build an inline-styled HTML document for reliable rendering */
-        var htmlStr = '<div style="width:650px;padding:28px 32px 20px;background:#fff;color:#000;font-family:Arial,Helvetica,sans-serif;box-sizing:border-box;">' +
-          '<h1 style="font-size:22px;font-weight:800;margin:0 0 6px;color:#0F1729;">' + escForPdf(title) + '</h1>' +
-          '<div style="font-size:11px;color:#94A3B8;margin-bottom:18px;padding-bottom:12px;border-bottom:1px solid #E2E8F0;">' + escForPdf(metaText) + '</div>' +
-          '<div style="font-size:14px;line-height:1.7;color:#1E293B;">' + cleanContent + '</div>' +
+        var nunitoFont = "'Nunito', sans-serif";
+        var htmlStr = '<div style="width:650px;padding:28px 32px 20px;background:#fff;color:#000;font-family:' + nunitoFont + ';box-sizing:border-box;">' +
+          '<h1 style="font-size:22px;font-weight:800;margin:0 0 6px;color:#0F1729;font-family:' + nunitoFont + ';">' + escForPdf(title) + '</h1>' +
+          '<div style="font-size:11px;color:#94A3B8;margin-bottom:18px;padding-bottom:12px;border-bottom:1px solid #E2E8F0;font-family:' + nunitoFont + ';">' + escForPdf(metaText) + '</div>' +
+          '<div class="pdf-body" style="font-size:14px;line-height:1.7;color:#1E293B;font-family:' + nunitoFont + ';">' + editorContent + '</div>' +
           '</div>';
 
-        /* Sanitise: strip resize handles, contenteditable attrs */
+        /* Sanitise: strip resize handles, contenteditable attrs, apply styles */
         var tmp = document.createElement('div');
         tmp.innerHTML = htmlStr;
         tmp.querySelectorAll('[class*="resize"]').forEach(function(el) { el.remove(); });
         tmp.querySelectorAll('[contenteditable]').forEach(function(el) { el.removeAttribute('contenteditable'); });
+
+        /* Preserve teal section separator lines under h2 (matches editor CSS) */
+        tmp.querySelectorAll('h2').forEach(function(h) {
+          h.style.marginTop = '28px';
+          h.style.marginBottom = '8px';
+          h.style.paddingBottom = '6px';
+          h.style.borderBottom = '2px solid rgba(45,212,191,0.35)';
+          h.style.fontFamily = nunitoFont;
+          h.style.color = '#0F1729';
+        });
+        tmp.querySelectorAll('h1,h3').forEach(function(h) {
+          h.style.fontFamily = nunitoFont;
+          h.style.color = '#0F1729';
+        });
+        /* Style tables for PDF */
         tmp.querySelectorAll('table').forEach(function(tbl) {
-          tbl.style.cssText = 'width:100%;border-collapse:collapse;margin:12px 0;font-size:13px;';
+          tbl.style.cssText = 'width:100%;border-collapse:collapse;margin:12px 0;font-size:13px;font-family:' + nunitoFont + ';';
           tbl.querySelectorAll('td, th').forEach(function(c) {
             c.style.border = '1px solid #CBD5E1';
             c.style.padding = '6px 10px';
@@ -6174,9 +6191,15 @@
             c.style.fontWeight = '700';
           });
         });
+        /* Fit images within page */
         tmp.querySelectorAll('img').forEach(function(img) {
           img.style.maxWidth = '100%';
           img.style.height = 'auto';
+        });
+        /* Style links to show as teal */
+        tmp.querySelectorAll('a').forEach(function(a) {
+          a.style.color = '#14B8A6';
+          a.style.textDecoration = 'underline';
         });
 
         var finalHtml = tmp.innerHTML;
@@ -6213,15 +6236,19 @@
       return d.innerHTML;
     }
 
-    $('#back-to-notes').addEventListener('click',()=>{ saveCurrentNote(); S.currentNoteId=null; showView('view-notes'); });
+    /* (back-to-notes handler already registered earlier — no duplicate) */
 
     /* ── Auto-save ────────────────────────────────── */
     let saveTimer=null;
     var lastLoadedContent = null; /* tracks what we last loaded/saved to detect real remote changes */
     function scheduleSave(delta, oldDelta, source) { if(source && source !== 'user') return; if(saveTimer) clearTimeout(saveTimer); saveTimer=setTimeout(saveCurrentNote,1000); }
+    var _saveInProgress = false;
     async function saveCurrentNote() {
       saveTimer=null; /* reset so onSnapshot sync check works */
       if(!S.currentNoteId||!store) return;
+      if(_saveInProgress) return; /* prevent concurrent saves racing */
+      _saveInProgress = true;
+      const noteIdAtStart = S.currentNoteId; /* capture before async gap */
       const title=$('#note-title').value.trim()||'Untitled Note';
       const content=quill.root.innerHTML;
       /* ── CRITICAL: set lastLoadedContent BEFORE the await ──
@@ -6232,12 +6259,27 @@
       lastLoadedContent = content;
       const ss=$('#save-status');
       ss.innerHTML='<i class="fas fa-circle-notch fa-spin"></i> Saving\u2026'; ss.className='save-status saving';
-      try{ await store.update('notes',S.currentNoteId,{title,content});
-        ss.innerHTML='<i class="fas fa-check"></i> Saved'; ss.className='save-status saved';
+      try{
+        await store.update('notes', noteIdAtStart, {title, content});
+        /* Only update status if still viewing the same note */
+        if (S.currentNoteId === noteIdAtStart) {
+          ss.innerHTML='<i class="fas fa-check"></i> Saved'; ss.className='save-status saved';
+        }
       }catch(e){
+        console.log('Save error detail: ' + JSON.stringify({code: e.code, msg: e.message}));
         var msg = (e.message && e.message.indexOf('exceeds the maximum') !== -1) ? 'Note too large — try removing some images' : 'Save error';
-        ss.innerHTML='<i class="fas fa-exclamation-circle"></i> ' + msg; ss.className='save-status error';
+        if (S.currentNoteId === noteIdAtStart) {
+          ss.innerHTML='<i class="fas fa-exclamation-circle"></i> ' + msg; ss.className='save-status error';
+          /* Auto-retry once after 3 seconds */
+          setTimeout(function() {
+            if (S.currentNoteId === noteIdAtStart) {
+              ss.innerHTML=''; ss.className='save-status';
+              scheduleSave(null, null, 'user');
+            }
+          }, 3000);
+        }
       }
+      _saveInProgress = false;
     }
     quill.on('text-change',scheduleSave);
     $('#note-title').addEventListener('input',scheduleSave);
