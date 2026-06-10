@@ -649,6 +649,22 @@
     /* Transform-based zoom on editor — visual only, no layout change */
     .ql-editor { transform-origin:top left; }
 
+    /* ── PDF share button ───────────────────────────── */
+    #btn-share-pdf i { color:var(--c-text-muted); transition:color var(--transition); }
+    #btn-share-pdf:hover i { color:#EF4444; }
+    #btn-share-pdf.generating { pointer-events:none; opacity:0.5; }
+    .pdf-toast {
+      position:fixed; bottom:28px; left:50%; transform:translateX(-50%);
+      background:var(--c-surface); color:var(--c-text); padding:12px 22px;
+      border-radius:var(--radius-md); box-shadow:var(--shadow-lg);
+      font-family:var(--font-main); font-size:14px; font-weight:600;
+      z-index:2000; display:flex; align-items:center; gap:10px;
+      border:1px solid var(--c-border); animation:fadeUp .25s ease;
+    }
+    .pdf-toast i.fa-spin { color:var(--c-primary); }
+    .pdf-toast.success i { color:#22C55E; }
+    .pdf-toast.error i { color:var(--c-danger); }
+
     /* ── Quick Notes button & badge ────────────────── */
     .btn-topbar.btn-qn { position:relative; }
     .qn-badge {
@@ -817,6 +833,7 @@
         <span class="nav-title" id="editor-crumb"></span>
         <button class="btn-topbar" id="btn-editor-move" title="Move note"><i class="fas fa-arrow-right-arrow-left"></i></button>
         <button class="btn-topbar" id="btn-editor-star" title="Add to favourites"><i class="fas fa-star"></i></button>
+        <button class="btn-topbar" id="btn-share-pdf" title="Share as PDF"><i class="fas fa-file-pdf"></i></button>
         <div class="save-status" id="save-status"></div>
       </div>
       <div class="editor-body">
@@ -985,6 +1002,7 @@
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
   <script>
     /* ── Global error handler: show crash info instead of white screen ── */
     function showCrashScreen(title, detail) {
@@ -6104,6 +6122,117 @@
         else { this.classList.remove('active-star'); this.title = 'Add to favourites'; }
       }
     });
+
+    /* ── Share as PDF ─────────────────────────────── */
+    $('#btn-share-pdf').addEventListener('click', async function() {
+      var btn = this;
+      if (btn.classList.contains('generating')) return;
+      btn.classList.add('generating');
+
+      /* Show toast */
+      var toast = document.createElement('div');
+      toast.className = 'pdf-toast';
+      toast.innerHTML = '<i class="fas fa-circle-notch fa-spin"></i> Generating PDF…';
+      document.body.appendChild(toast);
+
+      try {
+        var title = ($('#note-title').value || '').trim() || 'Untitled Note';
+        var editorContent = quill.root.innerHTML;
+
+        /* Build a clean container for PDF rendering */
+        var pdfWrap = document.createElement('div');
+        pdfWrap.style.cssText = 'position:fixed;left:-9999px;top:0;width:700px;background:#fff;color:#000;font-family:"Nunito",sans-serif;padding:32px 36px 24px;box-sizing:border-box;';
+
+        /* Title */
+        var h1 = document.createElement('h1');
+        h1.style.cssText = 'font-size:22px;font-weight:800;margin:0 0 6px;color:#0F1729;font-family:"Nunito",sans-serif;';
+        h1.textContent = title;
+        pdfWrap.appendChild(h1);
+
+        /* Meta line */
+        var meta = document.createElement('div');
+        meta.style.cssText = 'font-size:11px;color:#94A3B8;margin-bottom:18px;padding-bottom:12px;border-bottom:1px solid #E2E8F0;font-family:"Nunito",sans-serif;';
+        var crumb = ($('#editor-crumb').textContent || '').trim();
+        var now = new Date();
+        var dateStr = now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0');
+        meta.textContent = (crumb ? crumb + '  •  ' : '') + dateStr;
+        pdfWrap.appendChild(meta);
+
+        /* Content */
+        var body = document.createElement('div');
+        body.style.cssText = 'font-size:14px;line-height:1.7;color:#1E293B;font-family:"Nunito",sans-serif;';
+        body.innerHTML = editorContent;
+
+        /* Clean up content for PDF: remove resize handles, selection highlights, etc. */
+        body.querySelectorAll('.tbl-resize-handle, .tbl-sel').forEach(function(el) { el.classList.remove('tbl-sel'); });
+        body.querySelectorAll('[class*="resize"]').forEach(function(el) { el.remove(); });
+
+        /* Style tables nicely for PDF */
+        body.querySelectorAll('table').forEach(function(tbl) {
+          tbl.style.cssText = 'width:100%;border-collapse:collapse;margin:12px 0;font-size:13px;';
+          tbl.querySelectorAll('td, th').forEach(function(c) {
+            c.style.border = '1px solid #CBD5E1';
+            c.style.padding = '6px 10px';
+            c.removeAttribute('contenteditable');
+          });
+          tbl.querySelectorAll('th').forEach(function(c) {
+            c.style.background = '#F1F5F9';
+            c.style.fontWeight = '700';
+          });
+        });
+
+        /* Style headings */
+        body.querySelectorAll('h1,h2,h3').forEach(function(h) {
+          h.style.color = '#0F1729';
+          h.style.fontFamily = '"Nunito",sans-serif';
+        });
+
+        /* Style images to fit within page */
+        body.querySelectorAll('img').forEach(function(img) {
+          img.style.maxWidth = '100%';
+          img.style.height = 'auto';
+        });
+
+        pdfWrap.appendChild(body);
+        document.body.appendChild(pdfWrap);
+
+        /* Generate PDF */
+        var opt = {
+          margin:       [10, 10, 14, 10],
+          filename:     title.replace(/[^a-zA-Z0-9\u4e00-\u9fff\u3400-\u4dbf _-]/g, '_') + '.pdf',
+          image:        { type: 'jpeg', quality: 0.95 },
+          html2canvas:  { scale: 2, useCORS: true, letterRendering: true, scrollY: 0 },
+          jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' },
+          pagebreak:    { mode: ['avoid-all', 'css', 'legacy'] }
+        };
+
+        var pdfBlob = await html2pdf().set(opt).from(pdfWrap).outputPdf('blob');
+        document.body.removeChild(pdfWrap);
+
+        /* Create download link */
+        var blobUrl = URL.createObjectURL(new Blob([pdfBlob], { type: 'application/pdf' }));
+        var link = document.createElement('a');
+        link.href = blobUrl;
+        link.download = opt.filename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        setTimeout(function() { URL.revokeObjectURL(blobUrl); }, 5000);
+
+        /* Success toast */
+        toast.className = 'pdf-toast success';
+        toast.innerHTML = '<i class="fas fa-check-circle"></i> PDF downloaded!';
+        setTimeout(function() { if (toast.parentNode) toast.remove(); }, 2000);
+
+      } catch (err) {
+        console.log('PDF generation error: ' + (err.message || err));
+        toast.className = 'pdf-toast error';
+        toast.innerHTML = '<i class="fas fa-exclamation-circle"></i> PDF generation failed';
+        setTimeout(function() { if (toast.parentNode) toast.remove(); }, 3000);
+      }
+      btn.classList.remove('generating');
+    });
+
     $('#back-to-notes').addEventListener('click',()=>{ saveCurrentNote(); S.currentNoteId=null; showView('view-notes'); });
 
     /* ── Auto-save ────────────────────────────────── */
