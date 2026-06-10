@@ -6138,10 +6138,13 @@
       try {
         var title = ($('#note-title').value || '').trim() || 'Untitled Note';
         var editorContent = quill.root.innerHTML;
+        var pdfFilename = title + '.pdf';
 
-        /* Build a clean container for PDF rendering */
+        /* Build a clean container for PDF rendering.
+           html2canvas needs the element to be on-screen and in normal flow
+           to capture it. We overlay it at 0,0 behind everything, then remove. */
         var pdfWrap = document.createElement('div');
-        pdfWrap.style.cssText = 'position:fixed;left:-9999px;top:0;width:700px;background:#fff;color:#000;font-family:"Nunito",sans-serif;padding:32px 36px 24px;box-sizing:border-box;';
+        pdfWrap.style.cssText = 'position:absolute;left:0;top:0;z-index:-1;opacity:0;pointer-events:none;width:700px;background:#fff;color:#000;font-family:"Nunito",sans-serif;padding:32px 36px 24px;box-sizing:border-box;';
 
         /* Title */
         var h1 = document.createElement('h1');
@@ -6163,11 +6166,11 @@
         body.style.cssText = 'font-size:14px;line-height:1.7;color:#1E293B;font-family:"Nunito",sans-serif;';
         body.innerHTML = editorContent;
 
-        /* Clean up content for PDF: remove resize handles, selection highlights, etc. */
+        /* Clean up: remove resize handles, selection highlights */
         body.querySelectorAll('.tbl-resize-handle, .tbl-sel').forEach(function(el) { el.classList.remove('tbl-sel'); });
         body.querySelectorAll('[class*="resize"]').forEach(function(el) { el.remove(); });
 
-        /* Style tables nicely for PDF */
+        /* Style tables for PDF */
         body.querySelectorAll('table').forEach(function(tbl) {
           tbl.style.cssText = 'width:100%;border-collapse:collapse;margin:12px 0;font-size:13px;';
           tbl.querySelectorAll('td, th').forEach(function(c) {
@@ -6187,7 +6190,7 @@
           h.style.fontFamily = '"Nunito",sans-serif';
         });
 
-        /* Style images to fit within page */
+        /* Fit images within page */
         body.querySelectorAll('img').forEach(function(img) {
           img.style.maxWidth = '100%';
           img.style.height = 'auto';
@@ -6196,28 +6199,26 @@
         pdfWrap.appendChild(body);
         document.body.appendChild(pdfWrap);
 
-        /* Generate PDF */
+        /* Force a layout pass so html2canvas sees the rendered content */
+        pdfWrap.offsetHeight;  
+
+        /* Make visible for html2canvas capture (opacity:0 blocks capture) */
+        pdfWrap.style.opacity = '1';
+
+        /* Generate & auto-download PDF */
         var opt = {
           margin:       [10, 10, 14, 10],
-          filename:     title.replace(/[^a-zA-Z0-9\u4e00-\u9fff\u3400-\u4dbf _-]/g, '_') + '.pdf',
+          filename:     pdfFilename,
           image:        { type: 'jpeg', quality: 0.95 },
-          html2canvas:  { scale: 2, useCORS: true, letterRendering: true, scrollY: 0 },
+          html2canvas:  { scale: 2, useCORS: true, letterRendering: true, scrollY: -window.scrollY, windowWidth: 700 },
           jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' },
           pagebreak:    { mode: ['avoid-all', 'css', 'legacy'] }
         };
 
-        var pdfBlob = await html2pdf().set(opt).from(pdfWrap).outputPdf('blob');
-        document.body.removeChild(pdfWrap);
+        await html2pdf().set(opt).from(pdfWrap).save();
 
-        /* Create download link */
-        var blobUrl = URL.createObjectURL(new Blob([pdfBlob], { type: 'application/pdf' }));
-        var link = document.createElement('a');
-        link.href = blobUrl;
-        link.download = opt.filename;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        setTimeout(function() { URL.revokeObjectURL(blobUrl); }, 5000);
+        /* Clean up */
+        if (pdfWrap.parentNode) document.body.removeChild(pdfWrap);
 
         /* Success toast */
         toast.className = 'pdf-toast success';
@@ -6226,6 +6227,9 @@
 
       } catch (err) {
         console.log('PDF generation error: ' + (err.message || err));
+        /* Clean up wrapper on error too */
+        var leftover = document.querySelector('[style*="z-index:-1"][style*="width:700px"]');
+        if (leftover) leftover.remove();
         toast.className = 'pdf-toast error';
         toast.innerHTML = '<i class="fas fa-exclamation-circle"></i> PDF generation failed';
         setTimeout(function() { if (toast.parentNode) toast.remove(); }, 3000);
