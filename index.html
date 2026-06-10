@@ -6140,85 +6140,58 @@
         var editorContent = quill.root.innerHTML;
         var pdfFilename = title + '.pdf';
 
-        /* Build a clean container for PDF rendering.
-           html2canvas needs the element to be on-screen and in normal flow
-           to capture it. We overlay it at 0,0 behind everything, then remove. */
-        var pdfWrap = document.createElement('div');
-        pdfWrap.style.cssText = 'position:absolute;left:0;top:0;z-index:-1;opacity:0;pointer-events:none;width:700px;background:#fff;color:#000;font-family:"Nunito",sans-serif;padding:32px 36px 24px;box-sizing:border-box;';
-
-        /* Title */
-        var h1 = document.createElement('h1');
-        h1.style.cssText = 'font-size:22px;font-weight:800;margin:0 0 6px;color:#0F1729;font-family:"Nunito",sans-serif;';
-        h1.textContent = title;
-        pdfWrap.appendChild(h1);
-
-        /* Meta line */
-        var meta = document.createElement('div');
-        meta.style.cssText = 'font-size:11px;color:#94A3B8;margin-bottom:18px;padding-bottom:12px;border-bottom:1px solid #E2E8F0;font-family:"Nunito",sans-serif;';
+        /* Crumb + date for the meta line */
         var crumb = ($('#editor-crumb').textContent || '').trim();
         var now = new Date();
         var dateStr = now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0');
-        meta.textContent = (crumb ? crumb + '  •  ' : '') + dateStr;
-        pdfWrap.appendChild(meta);
+        var metaText = (crumb ? crumb + '  \u2022  ' : '') + dateStr;
 
-        /* Content */
-        var body = document.createElement('div');
-        body.style.cssText = 'font-size:14px;line-height:1.7;color:#1E293B;font-family:"Nunito",sans-serif;';
-        body.innerHTML = editorContent;
+        /* Build full HTML string — html2pdf will create its own
+           temporary container, append it on-screen, and capture it.
+           This avoids all off-screen / opacity / z-index issues. */
+        var cleanContent = editorContent;
 
-        /* Clean up: remove resize handles, selection highlights */
-        body.querySelectorAll('.tbl-resize-handle, .tbl-sel').forEach(function(el) { el.classList.remove('tbl-sel'); });
-        body.querySelectorAll('[class*="resize"]').forEach(function(el) { el.remove(); });
+        /* Build an inline-styled HTML document for reliable rendering */
+        var htmlStr = '<div style="width:650px;padding:28px 32px 20px;background:#fff;color:#000;font-family:Arial,Helvetica,sans-serif;box-sizing:border-box;">' +
+          '<h1 style="font-size:22px;font-weight:800;margin:0 0 6px;color:#0F1729;">' + escForPdf(title) + '</h1>' +
+          '<div style="font-size:11px;color:#94A3B8;margin-bottom:18px;padding-bottom:12px;border-bottom:1px solid #E2E8F0;">' + escForPdf(metaText) + '</div>' +
+          '<div style="font-size:14px;line-height:1.7;color:#1E293B;">' + cleanContent + '</div>' +
+          '</div>';
 
-        /* Style tables for PDF */
-        body.querySelectorAll('table').forEach(function(tbl) {
+        /* Sanitise: strip resize handles, contenteditable attrs */
+        var tmp = document.createElement('div');
+        tmp.innerHTML = htmlStr;
+        tmp.querySelectorAll('[class*="resize"]').forEach(function(el) { el.remove(); });
+        tmp.querySelectorAll('[contenteditable]').forEach(function(el) { el.removeAttribute('contenteditable'); });
+        tmp.querySelectorAll('table').forEach(function(tbl) {
           tbl.style.cssText = 'width:100%;border-collapse:collapse;margin:12px 0;font-size:13px;';
           tbl.querySelectorAll('td, th').forEach(function(c) {
             c.style.border = '1px solid #CBD5E1';
             c.style.padding = '6px 10px';
-            c.removeAttribute('contenteditable');
           });
           tbl.querySelectorAll('th').forEach(function(c) {
             c.style.background = '#F1F5F9';
             c.style.fontWeight = '700';
           });
         });
-
-        /* Style headings */
-        body.querySelectorAll('h1,h2,h3').forEach(function(h) {
-          h.style.color = '#0F1729';
-          h.style.fontFamily = '"Nunito",sans-serif';
-        });
-
-        /* Fit images within page */
-        body.querySelectorAll('img').forEach(function(img) {
+        tmp.querySelectorAll('img').forEach(function(img) {
           img.style.maxWidth = '100%';
           img.style.height = 'auto';
         });
 
-        pdfWrap.appendChild(body);
-        document.body.appendChild(pdfWrap);
-
-        /* Force a layout pass so html2canvas sees the rendered content */
-        pdfWrap.offsetHeight;  
-
-        /* Make visible for html2canvas capture (opacity:0 blocks capture) */
-        pdfWrap.style.opacity = '1';
+        var finalHtml = tmp.innerHTML;
 
         /* Generate & auto-download PDF */
         var opt = {
           margin:       [10, 10, 14, 10],
           filename:     pdfFilename,
           image:        { type: 'jpeg', quality: 0.95 },
-          html2canvas:  { scale: 2, useCORS: true, letterRendering: true, scrollY: -window.scrollY, windowWidth: 700 },
+          html2canvas:  { scale: 2, useCORS: true, allowTaint: true },
           jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' },
           pagebreak:    { mode: ['avoid-all', 'css', 'legacy'] }
         };
 
-        await html2pdf().set(opt).from(pdfWrap).save();
-
-        /* Clean up */
-        if (pdfWrap.parentNode) document.body.removeChild(pdfWrap);
+        await html2pdf().set(opt).from(finalHtml, 'string').save();
 
         /* Success toast */
         toast.className = 'pdf-toast success';
@@ -6227,15 +6200,18 @@
 
       } catch (err) {
         console.log('PDF generation error: ' + (err.message || err));
-        /* Clean up wrapper on error too */
-        var leftover = document.querySelector('[style*="z-index:-1"][style*="width:700px"]');
-        if (leftover) leftover.remove();
         toast.className = 'pdf-toast error';
         toast.innerHTML = '<i class="fas fa-exclamation-circle"></i> PDF generation failed';
         setTimeout(function() { if (toast.parentNode) toast.remove(); }, 3000);
       }
       btn.classList.remove('generating');
     });
+
+    function escForPdf(s) {
+      var d = document.createElement('div');
+      d.textContent = s;
+      return d.innerHTML;
+    }
 
     $('#back-to-notes').addEventListener('click',()=>{ saveCurrentNote(); S.currentNoteId=null; showView('view-notes'); });
 
