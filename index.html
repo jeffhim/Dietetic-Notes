@@ -833,7 +833,7 @@
         <span class="nav-title" id="editor-crumb"></span>
         <button class="btn-topbar" id="btn-editor-move" title="Move note"><i class="fas fa-arrow-right-arrow-left"></i></button>
         <button class="btn-topbar" id="btn-editor-star" title="Add to favourites"><i class="fas fa-star"></i></button>
-        <button class="btn-topbar" id="btn-share-pdf" title="Share as PDF"><i class="fas fa-file-pdf"></i></button>
+        <button class="btn-topbar" id="btn-share-pdf" title="Share as PDF"><i class="fas fa-share-from-square"></i></button>
         <div class="save-status" id="save-status"></div>
       </div>
       <div class="editor-body">
@@ -6264,21 +6264,31 @@
         var ia = new Uint8Array(ab);
         for (var i = 0; i < byteString.length; i++) ia[i] = byteString.charCodeAt(i);
         var pdfBlob = new Blob([ab], { type: 'application/pdf' });
+        var pdfFile = new File([pdfBlob], pdfFilename, { type: 'application/pdf' });
 
-        /* Trigger download via <a download> — safe in iframes */
-        var blobUrl = URL.createObjectURL(pdfBlob);
-        var dlLink = document.createElement('a');
-        dlLink.href = blobUrl;
-        dlLink.download = pdfFilename;
-        dlLink.style.display = 'none';
-        document.body.appendChild(dlLink);
-        dlLink.click();
-        document.body.removeChild(dlLink);
-        setTimeout(function() { URL.revokeObjectURL(blobUrl); }, 10000);
-
-        /* Success toast */
-        toast.className = 'pdf-toast success';
-        toast.innerHTML = '<i class="fas fa-check-circle"></i> PDF downloaded!';
+        /* Use native share sheet to attach the PDF file directly.
+           Falls back to download link if share API is unavailable. */
+        if (navigator.share && navigator.canShare && navigator.canShare({ files: [pdfFile] })) {
+          await navigator.share({
+            files: [pdfFile],
+            title: title
+          });
+          toast.className = 'pdf-toast success';
+          toast.innerHTML = '<i class="fas fa-check-circle"></i> PDF shared!';
+        } else {
+          /* Fallback: download via <a download> */
+          var blobUrl = URL.createObjectURL(pdfBlob);
+          var dlLink = document.createElement('a');
+          dlLink.href = blobUrl;
+          dlLink.download = pdfFilename;
+          dlLink.style.display = 'none';
+          document.body.appendChild(dlLink);
+          dlLink.click();
+          document.body.removeChild(dlLink);
+          setTimeout(function() { URL.revokeObjectURL(blobUrl); }, 10000);
+          toast.className = 'pdf-toast success';
+          toast.innerHTML = '<i class="fas fa-check-circle"></i> PDF downloaded!';
+        }
         setTimeout(function() { if (toast.parentNode) toast.remove(); }, 2000);
 
       } catch (err) {
