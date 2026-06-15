@@ -789,7 +789,7 @@
         <img class="nav-avatar" src="https://pfst.cf2.poecdn.net/base/image/bbef7fb2fad7dca649ca8ee04dc8dadfb12deabbf00a9bbff9d3255e0006759d?w=1366&h=2048" alt="Jeffrey">
         <span class="nav-title">Jeffrey's Dietetics</span>
         <div class="nav-right">
-          <button class="btn-topbar btn-qn" id="btn-quicknotes" title="Quick Notes"><i class="fas fa-thumbtack"></i><span class="qn-badge" id="qn-badge"></span></button>
+          <button class="btn-topbar btn-qn" title="Quick Notes"><i class="fas fa-thumbtack"></i><span class="qn-badge"></span></button>
           <button class="btn-topbar" id="btn-favs-cats" title="My Favourites"><i class="fas fa-star"></i></button>
           <button class="btn-topbar" id="btn-signout" title="Sign out"><i class="fas fa-right-from-bracket"></i></button>
         </div>
@@ -804,6 +804,7 @@
         <button class="btn-nav-back" id="back-to-cats"><i class="fas fa-arrow-left"></i> Back</button>
         <span class="nav-title" id="specs-title"></span>
         <div class="nav-right">
+          <button class="btn-topbar btn-qn" title="Quick Notes"><i class="fas fa-thumbtack"></i><span class="qn-badge"></span></button>
           <button class="btn-topbar" id="btn-home-specs" title="Home"><i class="fas fa-house"></i></button>
           <button class="btn-topbar" id="btn-favs-specs" title="My Favourites"><i class="fas fa-star"></i></button>
         </div>
@@ -818,6 +819,7 @@
         <button class="btn-nav-back" id="back-to-specs"><i class="fas fa-arrow-left"></i> Back</button>
         <span class="nav-title" id="notes-title"></span>
         <div class="nav-right">
+          <button class="btn-topbar btn-qn" title="Quick Notes"><i class="fas fa-thumbtack"></i><span class="qn-badge"></span></button>
           <button class="btn-topbar" id="btn-home-notes" title="Home"><i class="fas fa-house"></i></button>
           <button class="btn-topbar" id="btn-favs-notes" title="My Favourites"><i class="fas fa-star"></i></button>
         </div>
@@ -831,9 +833,9 @@
       <div class="navbar">
         <button class="btn-nav-back" id="back-to-notes"><i class="fas fa-arrow-left"></i> Back</button>
         <span class="nav-title" id="editor-crumb"></span>
-        <button class="btn-topbar" id="btn-editor-move" title="Move note"><i class="fas fa-arrow-right-arrow-left"></i></button>
         <button class="btn-topbar" id="btn-editor-star" title="Add to favourites"><i class="fas fa-star"></i></button>
         <button class="btn-topbar" id="btn-share-pdf" title="Share as PDF"><i class="fas fa-share-from-square"></i></button>
+        <button class="btn-topbar btn-qn" title="Quick Notes"><i class="fas fa-thumbtack"></i><span class="qn-badge"></span></button>
         <div class="save-status" id="save-status"></div>
       </div>
       <div class="editor-body">
@@ -856,6 +858,7 @@
         <button class="btn-nav-back" id="back-from-favs"><i class="fas fa-arrow-left"></i> Back</button>
         <span class="nav-title"><i class="fas fa-star" style="color:#f59e0b;font-size:14px;margin-right:4px"></i> My Favourites</span>
         <div class="nav-right">
+          <button class="btn-topbar btn-qn" title="Quick Notes"><i class="fas fa-thumbtack"></i><span class="qn-badge"></span></button>
           <button class="btn-topbar" id="btn-home-favs" title="Home"><i class="fas fa-house"></i></button>
         </div>
       </div>
@@ -1004,23 +1007,45 @@
   <script src="https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
   <script>
-    /* ── Global error handler: show crash info instead of white screen ── */
-    function showCrashScreen(title, detail) {
-      document.body.style.cssText = 'background:#FFE0E0;color:#000;padding:24px;font-family:monospace;margin:0;';
-      document.body.innerHTML = '<div style="background:#D32F2F;color:#fff;padding:16px 20px;border-radius:8px;margin-bottom:16px;font-size:18px;font-weight:bold;">' +
-        '⚠ App Crashed</div><div style="background:#fff;padding:16px;border-radius:8px;border:2px solid #D32F2F;">' +
-        '<h3 style="margin:0 0 8px;color:#D32F2F;">' + title + '</h3>' +
-        '<pre style="white-space:pre-wrap;word-break:break-all;margin:0;font-size:13px;">' + detail + '</pre></div>' +
-        '<p style="margin-top:16px;font-size:13px;color:#666;">Please screenshot this and send to developer.</p>';
+    /* ── Global error handler: show dismissible banner instead of destroying the app ── */
+    var _errorBannerTimer = null;
+    function showErrorBanner(detail) {
+      /* Remove previous banner if any */
+      var old = document.getElementById('err-banner');
+      if (old) old.remove();
+      if (_errorBannerTimer) clearTimeout(_errorBannerTimer);
+
+      var banner = document.createElement('div');
+      banner.id = 'err-banner';
+      banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#D32F2F;color:#fff;padding:10px 16px;font-family:monospace;font-size:12px;display:flex;align-items:center;gap:10px;box-shadow:0 2px 12px rgba(0,0,0,0.3);';
+      var msgSpan = document.createElement('span');
+      msgSpan.style.cssText = 'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+      msgSpan.textContent = '\u26A0 ' + detail;
+      var closeBtn = document.createElement('button');
+      closeBtn.style.cssText = 'background:rgba(255,255,255,0.2);border:none;color:#fff;padding:4px 10px;border-radius:4px;cursor:pointer;font-size:12px;flex-shrink:0;';
+      closeBtn.textContent = 'Dismiss';
+      closeBtn.onclick = function() { banner.remove(); };
+      banner.appendChild(msgSpan);
+      banner.appendChild(closeBtn);
+      document.body.appendChild(banner);
+
+      /* Auto-dismiss after 8 seconds */
+      _errorBannerTimer = setTimeout(function() { if (banner.parentNode) banner.remove(); }, 8000);
+      console.log('App error: ' + detail);
     }
-    window.onerror = function(msg, url, line, col, err) {
-      showCrashScreen('JavaScript Error', msg + '\nLine: ' + line + ', Col: ' + col +
-        (err && err.stack ? '\n\n' + err.stack : ''));
+    window.onerror = function(msg, url, line, col) {
+      /* Ignore benign cross-origin "Script error" with no detail */
+      if (msg === 'Script error.' && line === 0 && col === 0) return true;
+      showErrorBanner(msg + ' (line ' + line + ')');
+      return true; /* prevent default browser error handling */
     };
     window.onunhandledrejection = function(event) {
       var reason = event.reason;
-      var detail = reason ? (reason.stack || reason.message || String(reason)) : 'Unknown promise rejection';
-      showCrashScreen('Unhandled Promise Error', detail);
+      /* Ignore user-cancelled share dialog (AbortError) */
+      if (reason && reason.name === 'AbortError') return;
+      var detail = reason ? (reason.message || String(reason)) : 'Unknown error';
+      showErrorBanner(detail);
+      event.preventDefault(); /* prevent console error */
     };
 
     /* ── Always light mode (no dark mode) ────────── */
@@ -5476,7 +5501,7 @@
         if (newVal) { starEl.classList.add('starred'); starEl.title = 'Remove from favourites'; }
         else { starEl.classList.remove('starred'); starEl.title = 'Add to favourites'; }
       }
-      if (store) store.update('notes', noteId, { favourite: newVal });
+      if (store) store.update('notes', noteId, { favourite: newVal }).catch(function(){});
     }
 
     function renderFavourites() {
@@ -5984,28 +6009,28 @@
       showDialog({ title:'New Category', message:'Enter category name:', input:true, placeholder:'e.g. Clinical Dietetics',
         input2:true, input2label:'What do you call the 2nd layer?', placeholder2:'Specialty', hint2:'e.g. Specialty, Type, Topic',
         confirmText:'Create',
-        onConfirm:(n,sub)=>{ if(n) store.add('categories',{name:n,sublabel:sub||'Specialty',order:S.categories.length,template:[]}); }});
+        onConfirm:(n,sub)=>{ if(n) store.add('categories',{name:n,sublabel:sub||'Specialty',order:S.categories.length,template:[]}).catch(function(){}); }});
     }
     function createSpecialty() {
       const cat=S.categories.find(c=>c.id===S.currentCatId);
       const sub=getSublabel(cat);
       showDialog({ title:'New '+sub, message:'Enter '+sub.toLowerCase()+' name:', input:true, placeholder:'e.g. Renal Nutrition', confirmText:'Create',
-        onConfirm:n=>{ if(n) store.add('specialties',{name:n,categoryId:S.currentCatId,order:(S.specialties[S.currentCatId]||[]).length,template:[]}); }});
+        onConfirm:n=>{ if(n) store.add('specialties',{name:n,categoryId:S.currentCatId,order:(S.specialties[S.currentCatId]||[]).length,template:[]}).catch(function(){}); }});
     }
     function createNote() { openNewNoteDialog(); }
     function deleteCategory(id,name) {
       showDialog({ title:'Delete Category', message:'Delete "'+name+'" and all contents?', confirmText:'Delete', confirmClass:'btn-dialog-danger',
-        onConfirm:()=>{ const ops=[{col:'categories',id}]; (S.specialties[id]||[]).forEach(s=>{ ops.push({col:'specialties',id:s.id}); (S.notes[s.id]||[]).forEach(n=>ops.push({col:'notes',id:n.id})); }); store.batchRemove(ops); }});
+        onConfirm:()=>{ const ops=[{col:'categories',id}]; (S.specialties[id]||[]).forEach(s=>{ ops.push({col:'specialties',id:s.id}); (S.notes[s.id]||[]).forEach(n=>ops.push({col:'notes',id:n.id})); }); store.batchRemove(ops).catch(function(){}); }});
     }
     function deleteSpecialty(id,name) {
       const cat=S.categories.find(c=>c.id===S.currentCatId);
       const sub=getSublabel(cat);
       showDialog({ title:'Delete '+sub, message:'Delete "'+name+'" and all notes?', confirmText:'Delete', confirmClass:'btn-dialog-danger',
-        onConfirm:()=>{ const ops=[{col:'specialties',id}]; (S.notes[id]||[]).forEach(n=>ops.push({col:'notes',id:n.id})); store.batchRemove(ops); }});
+        onConfirm:()=>{ const ops=[{col:'specialties',id}]; (S.notes[id]||[]).forEach(n=>ops.push({col:'notes',id:n.id})); store.batchRemove(ops).catch(function(){}); }});
     }
     function deleteNote(id,title) {
       showDialog({ title:'Delete Note', message:'Delete "'+(title||'Untitled Note')+'"?', confirmText:'Delete', confirmClass:'btn-dialog-danger',
-        onConfirm:()=>{ store.remove('notes',id); if(S.currentNoteId===id){S.currentNoteId=null; showView('view-notes');} }});
+        onConfirm:()=>{ store.remove('notes',id).catch(function(){}); if(S.currentNoteId===id){S.currentNoteId=null; showView('view-notes');} }});
     }
     function renameItem(col,id,cur) {
       if(col==='categories'){
@@ -6014,17 +6039,17 @@
         showDialog({ title:'Edit Category', message:'Category name:', input:true, placeholder:cur,
           input2:true, input2label:'2nd layer label:', placeholder2:curSub, hint2:'e.g. Specialty, Type, Topic',
           confirmText:'Save',
-          onConfirm:(n,sub)=>{ if(n) store.update(col,id,{name:n,sublabel:sub||curSub}); }});
+          onConfirm:(n,sub)=>{ if(n) store.update(col,id,{name:n,sublabel:sub||curSub}).catch(function(){}); }});
       } else {
         const cat=S.categories.find(c=>c.id===S.currentCatId);
         const sub=getSublabel(cat);
         showDialog({ title:'Rename '+sub, message:'Enter new name:', input:true, placeholder:cur, confirmText:'Rename',
-          onConfirm:n=>{ if(n) store.update(col,id,{name:n}); }});
+          onConfirm:n=>{ if(n) store.update(col,id,{name:n}).catch(function(){}); }});
       }
     }
     function renameNote(id,cur) {
       showDialog({ title:'Rename Note', message:'Enter new title:', input:true, placeholder:cur||'Untitled Note', confirmText:'Rename',
-        onConfirm:n=>{ if(!n)return; store.update('notes',id,{title:n}); if(S.currentNoteId===id) $('#note-title').value=n; }});
+        onConfirm:n=>{ if(!n)return; store.update('notes',id,{title:n}).catch(function(){}); if(S.currentNoteId===id) $('#note-title').value=n; }});
     }
 
     /* ═══ EDITOR ══════════════════════════════════════ */
@@ -6711,7 +6736,7 @@
         });
         nnOverlay.classList.remove('active');
         if (typeof id === 'string') openNote(id);
-        else if (id && typeof id.then === 'function') id.then(function(rid) { openNote(rid); });
+        else if (id && typeof id.then === 'function') id.then(function(rid) { openNote(rid); }).catch(function(){});
       });
 
       /* Enter on title input triggers create */
@@ -7004,20 +7029,21 @@
       var qnInput   = document.getElementById('qn-input');
       var qnAddBtn  = document.getElementById('qn-add');
       var qnClose   = document.getElementById('qn-close');
-      var qnBadge   = document.getElementById('qn-badge');
-      var qnBtn     = document.getElementById('btn-quicknotes');
+      /* Multiple Quick Notes buttons across all views — use class selector */
+      var qnBtns    = document.querySelectorAll('.btn-qn');
+      var qnBadges  = document.querySelectorAll('.qn-badge');
       if (!qnOverlay || !qnList) return;
 
       var qnItems = [];      /* [{id, text, ts}] */
       var qnLoaded = false;  /* have we loaded from Firestore yet? */
       var qnRef = null;      /* Firestore doc reference */
 
-      /* ── Badge ── */
+      /* ── Badge — update ALL badge dots across every view ── */
       function updateBadge() {
-        if (qnBadge) {
-          if (qnItems.length > 0) qnBadge.classList.add('visible');
-          else qnBadge.classList.remove('visible');
-        }
+        qnBadges.forEach(function(b) {
+          if (qnItems.length > 0) b.classList.add('visible');
+          else b.classList.remove('visible');
+        });
       }
 
       /* ── Render list ── */
@@ -7119,7 +7145,7 @@
         qnOverlay.classList.remove('active');
       }
 
-      if (qnBtn) qnBtn.addEventListener('click', openQN);
+      qnBtns.forEach(function(b) { b.addEventListener('click', openQN); });
       if (qnClose) qnClose.addEventListener('click', closeQN);
       qnOverlay.addEventListener('click', function(e) { if (e.target === qnOverlay) closeQN(); });
       if (qnAddBtn) qnAddBtn.addEventListener('click', addQN);
