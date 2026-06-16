@@ -6892,13 +6892,15 @@
       moveNoteId = null;
     });
 
-    /* Editor move button */
-    $('#btn-editor-move').addEventListener('click', () => {
-      if (!S.currentNoteId) return;
-      let noteData = null;
-      for (const k of Object.keys(S.notes)) { const f = S.notes[k].find(n=>n.id===S.currentNoteId); if(f){noteData=f;break;} }
-      openMoveDialog(S.currentNoteId, noteData ? noteData.title : $('#note-title').value);
-    });
+    /* Editor move button (only if present in DOM) */
+    if ($('#btn-editor-move')) {
+      $('#btn-editor-move').addEventListener('click', () => {
+        if (!S.currentNoteId) return;
+        let noteData = null;
+        for (const k of Object.keys(S.notes)) { const f = S.notes[k].find(n=>n.id===S.currentNoteId); if(f){noteData=f;break;} }
+        openMoveDialog(S.currentNoteId, noteData ? noteData.title : $('#note-title').value);
+      });
+    }
 
     /* ═══ TEMPLATE EDITOR ══════════════════════════════ */
     let tplSpecId = null;
