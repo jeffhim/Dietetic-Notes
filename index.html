@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Jeffrey's Dietetics v5.0</title>
+  <title>Jeffrey's Dietetics v5.1</title>
   <meta name="theme-color" content="#124B34" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#0A3A28" media="(prefers-color-scheme: dark)">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -11,6 +11,7 @@
   <meta name="apple-mobile-web-app-title" content="Jeff Dietetics">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="description" content="Professional dietetics notes by Jeffrey Chan">
+  <link rel="manifest" id="pwa-manifest">
   <link rel="icon" type="image/png" href="apple-touch-icon.png">
   <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
   <link rel="apple-touch-icon" sizes="512x512" href="apple-touch-icon.png">
@@ -665,6 +666,17 @@
     .pdf-toast.success i { color:#22C55E; }
     .pdf-toast.error i { color:var(--c-danger); }
 
+    /* ── Offline indicator ──────────────────────────── */
+    .offline-bar {
+      display:none; position:fixed; bottom:0; left:0; right:0; z-index:99998;
+      background:linear-gradient(135deg,#F59E0B,#D97706); color:#fff;
+      padding:6px 16px; font-family:var(--font-main); font-size:12px;
+      font-weight:700; text-align:center; letter-spacing:0.3px;
+      box-shadow:0 -2px 8px rgba(0,0,0,0.15);
+    }
+    .offline-bar.visible { display:flex; align-items:center; justify-content:center; gap:8px; }
+    .offline-bar i { font-size:13px; }
+
     /* ── Quick Notes button & badge ────────────────── */
     .btn-topbar.btn-qn { position:relative; }
     .qn-badge {
@@ -766,6 +778,9 @@
 
   <!-- TOAST -->
   <div id="toast"></div>
+
+  <!-- OFFLINE BAR -->
+  <div class="offline-bar" id="offline-bar"><i class="fas fa-triangle-exclamation"></i> <span>Offline mode — viewing cached data</span></div>
 
   <!-- LOGIN -->
   <div id="login-screen">
@@ -1047,6 +1062,58 @@
       showErrorBanner(detail);
       event.preventDefault(); /* prevent console error */
     };
+
+    /* ── Offline detection ──────────────────────────── */
+    var _isOffline = !navigator.onLine;
+    function updateOfflineBar() {
+      var bar = document.getElementById('offline-bar');
+      if (!bar) return;
+      _isOffline = !navigator.onLine;
+      if (_isOffline) bar.classList.add('visible');
+      else bar.classList.remove('visible');
+    }
+    window.addEventListener('online', function() { _isOffline = false; updateOfflineBar(); });
+    window.addEventListener('offline', function() { _isOffline = true; updateOfflineBar(); });
+    updateOfflineBar();
+
+    /* ── Service Worker registration (PWA offline support) ── */
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function() {
+        navigator.serviceWorker.register('./sw.js').then(function(reg) {
+          console.log('[SW] Registered, scope: ' + reg.scope);
+          /* Check for updates periodically */
+          setInterval(function() { reg.update(); }, 60 * 60 * 1000); /* hourly */
+        }).catch(function(err) {
+          console.log('[SW] Registration failed: ' + err.message);
+        });
+      });
+    }
+
+    /* ── PWA Manifest (inline, no separate file needed) ── */
+    (function() {
+      /* Generate a simple SVG icon for PWA */
+      var iconSvg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">'
+        + '<rect width="512" height="512" rx="96" fill="#124B34"/>'
+        + '<text x="256" y="340" text-anchor="middle" font-family="Arial,sans-serif" font-weight="900" font-size="280" fill="#2DD4BF">JD</text>'
+        + '</svg>';
+      var iconDataUri = 'data:image/svg+xml;base64,' + btoa(iconSvg);
+      var manifest = {
+        name: "Jeffrey's Dietetics",
+        short_name: "Dietetics",
+        description: "Professional dietetics notes",
+        start_url: "./index.html",
+        display: "standalone",
+        background_color: "#0F1A15",
+        theme_color: "#124B34",
+        orientation: "portrait-primary",
+        icons: [
+          { src: iconDataUri, sizes: "512x512", type: "image/svg+xml", purpose: "any maskable" }
+        ]
+      };
+      var blob = new Blob([JSON.stringify(manifest)], { type: 'application/json' });
+      var mLink = document.getElementById('pwa-manifest');
+      if (mLink) mLink.href = URL.createObjectURL(blob);
+    })();
 
     /* ── Always light mode (no dark mode) ────────── */
     document.documentElement.classList.remove('dark');
@@ -5102,6 +5169,9 @@
       messagingSenderId: "327184138289",
       appId: "1:327184138289:web:e64ec5e88e92ed1bde9510"
     };
+    /* Helper: get Firestore source option — use cache when offline for faster/resilient reads */
+    function _fsGetOpts() { return _isOffline ? { source: 'cache' } : {}; }
+
     (async()=>{
       try{
         if(!firebase.apps.length){
@@ -5113,71 +5183,75 @@
         firebase.auth().onAuthStateChanged(async u=>{
           if(u){
             store=new FirebaseStore(firebase.firestore(),u.uid);
-            /* Seed Firebase if empty (first login) */
+            /* Seed Firebase if empty (first login) — skip when offline */
             var didSeed=false;
-            try{
-              var snap=await firebase.firestore().collection('users').doc(u.uid).collection('categories').limit(1).get();
-              if(snap.empty){
-                didSeed=true;
-                $('#login-screen').style.display='none';
-                $('#seed-overlay').classList.add('active');
-                var mem=new InMemoryStore();
-                var db=firebase.firestore();
-                var base=db.collection('users').doc(u.uid);
-                var idMap={};
-                var ops=[];
-                Object.keys(mem._d.categories).forEach(function(oldId){
-                  var c=mem._d.categories[oldId];
-                  var ref=base.collection('categories').doc();
-                  idMap[oldId]=ref.id;
-                  ops.push({ref:ref,data:{name:c.name,sublabel:c.sublabel||'',order:c.order,template:c.template||[],createdAt:firebase.firestore.FieldValue.serverTimestamp()}});
-                });
-                Object.keys(mem._d.specialties).forEach(function(oldId){
-                  var s=mem._d.specialties[oldId];
-                  var ref=base.collection('specialties').doc();
-                  idMap[oldId]=ref.id;
-                  ops.push({ref:ref,data:{name:s.name,categoryId:idMap[s.categoryId],order:s.order,template:s.template||[],createdAt:firebase.firestore.FieldValue.serverTimestamp()}});
-                });
-                Object.keys(mem._d.notes).forEach(function(oldId){
-                  var n=mem._d.notes[oldId];
-                  var ref=base.collection('notes').doc();
-                  ops.push({ref:ref,data:{title:n.title,content:n.content,specialtyId:idMap[n.specialtyId],categoryId:idMap[n.categoryId],order:n.order,createdAt:n.createdAt||firebase.firestore.FieldValue.serverTimestamp(),updatedAt:n.updatedAt||firebase.firestore.FieldValue.serverTimestamp()}});
-                });
-                for(var i=0;i<ops.length;i+=400){
-                  var batch=db.batch();
-                  ops.slice(i,i+400).forEach(function(op){batch.set(op.ref,op.data);});
-                  await batch.commit();
-                }
-                $('#seed-overlay').classList.remove('active');
-                showToast('\u2705 Successfully uploaded '+ops.length+' items to Firebase','success');
-              }
-            }catch(seedErr){
-              $('#seed-overlay').classList.remove('active');
-              showToast('\u274C Upload failed: '+seedErr.message,'error',6000);
-              console.log('Seed error: '+seedErr.message);
-            }
-            /* ── One-time migration: update Clinical Dietetics specialty templates (v1) ── */
-            try{
-              var mdb=firebase.firestore();
-              var uDoc=mdb.collection('users').doc(u.uid);
-              var metaRef=uDoc.collection('_meta').doc('migrations');
-              var metaSnap=await metaRef.get();
-              var migrations=(metaSnap.exists&&metaSnap.data())||{};
-              if(!migrations.tplV1){
-                var newTpl=['Pathophysiology','Prevalence','Risk factors','Clinical Presentation','Medical/Surgical Treatment','Dietetic Assessment','Dietetic Intervention'];
-                var catSnap=await uDoc.collection('categories').where('name','==','Clinical Dietetics').limit(1).get();
-                if(!catSnap.empty){
-                  var clinCatId=catSnap.docs[0].id;
-                  var specSnap=await uDoc.collection('specialties').where('categoryId','==',clinCatId).get();
-                  if(!specSnap.empty){
-                    var mb=mdb.batch();
-                    specSnap.docs.forEach(function(d){ mb.update(d.ref,{template:newTpl}); });
-                    await mb.commit();
+            if(!_isOffline){
+              try{
+                var snap=await firebase.firestore().collection('users').doc(u.uid).collection('categories').limit(1).get();
+                if(snap.empty){
+                  didSeed=true;
+                  $('#login-screen').style.display='none';
+                  $('#seed-overlay').classList.add('active');
+                  var mem=new InMemoryStore();
+                  var db=firebase.firestore();
+                  var base=db.collection('users').doc(u.uid);
+                  var idMap={};
+                  var ops=[];
+                  Object.keys(mem._d.categories).forEach(function(oldId){
+                    var c=mem._d.categories[oldId];
+                    var ref=base.collection('categories').doc();
+                    idMap[oldId]=ref.id;
+                    ops.push({ref:ref,data:{name:c.name,sublabel:c.sublabel||'',order:c.order,template:c.template||[],createdAt:firebase.firestore.FieldValue.serverTimestamp()}});
+                  });
+                  Object.keys(mem._d.specialties).forEach(function(oldId){
+                    var s=mem._d.specialties[oldId];
+                    var ref=base.collection('specialties').doc();
+                    idMap[oldId]=ref.id;
+                    ops.push({ref:ref,data:{name:s.name,categoryId:idMap[s.categoryId],order:s.order,template:s.template||[],createdAt:firebase.firestore.FieldValue.serverTimestamp()}});
+                  });
+                  Object.keys(mem._d.notes).forEach(function(oldId){
+                    var n=mem._d.notes[oldId];
+                    var ref=base.collection('notes').doc();
+                    ops.push({ref:ref,data:{title:n.title,content:n.content,specialtyId:idMap[n.specialtyId],categoryId:idMap[n.categoryId],order:n.order,createdAt:n.createdAt||firebase.firestore.FieldValue.serverTimestamp(),updatedAt:n.updatedAt||firebase.firestore.FieldValue.serverTimestamp()}});
+                  });
+                  for(var i=0;i<ops.length;i+=400){
+                    var batch=db.batch();
+                    ops.slice(i,i+400).forEach(function(op){batch.set(op.ref,op.data);});
+                    await batch.commit();
                   }
+                  $('#seed-overlay').classList.remove('active');
+                  showToast('\u2705 Successfully uploaded '+ops.length+' items to Firebase','success');
                 }
-                await metaRef.set({tplV1:true},{merge:true});
+              }catch(seedErr){
+                $('#seed-overlay').classList.remove('active');
+                showToast('\u274C Upload failed: '+seedErr.message,'error',6000);
+                console.log('Seed error: '+seedErr.message);
               }
-            }catch(migErr){ console.log('Migration error: '+migErr.message); }
+            }
+            /* ── One-time migration: update Clinical Dietetics specialty templates (v1) — skip when offline ── */
+            if(!_isOffline){
+              try{
+                var mdb=firebase.firestore();
+                var uDoc=mdb.collection('users').doc(u.uid);
+                var metaRef=uDoc.collection('_meta').doc('migrations');
+                var metaSnap=await metaRef.get();
+                var migrations=(metaSnap.exists&&metaSnap.data())||{};
+                if(!migrations.tplV1){
+                  var newTpl=['Pathophysiology','Prevalence','Risk factors','Clinical Presentation','Medical/Surgical Treatment','Dietetic Assessment','Dietetic Intervention'];
+                  var catSnap=await uDoc.collection('categories').where('name','==','Clinical Dietetics').limit(1).get();
+                  if(!catSnap.empty){
+                    var clinCatId=catSnap.docs[0].id;
+                    var specSnap=await uDoc.collection('specialties').where('categoryId','==',clinCatId).get();
+                    if(!specSnap.empty){
+                      var mb=mdb.batch();
+                      specSnap.docs.forEach(function(d){ mb.update(d.ref,{template:newTpl}); });
+                      await mb.commit();
+                    }
+                  }
+                  await metaRef.set({tplV1:true},{merge:true});
+                }
+              }catch(migErr){ console.log('Migration error: '+migErr.message); }
+            }
             $('#login-screen').style.display='none'; $('#app').classList.add('active'); loadData(); loadHistoryFromFirebase(); showView('view-cats');
           }
           else{ $('#app').classList.remove('active'); $('#login-screen').style.display='flex'; S.unsubs.forEach(f=>f()); S.unsubs=[]; }
@@ -5713,7 +5787,7 @@
     function loadHistoryFromFirebase() {
       if (!store || !firebase.auth().currentUser) return;
       var uid = firebase.auth().currentUser.uid;
-      firebase.firestore().collection('users').doc(uid).collection('_meta').doc('searchHistory').get().then(function(doc) {
+      firebase.firestore().collection('users').doc(uid).collection('_meta').doc('searchHistory').get(_fsGetOpts()).then(function(doc) {
         if (doc.exists && doc.data().items) {
           searchHistory = doc.data().items;
         }
@@ -7111,7 +7185,7 @@
         var ref = getQNRef();
         if (!ref) return;
         try {
-          var snap = await ref.get();
+          var snap = await ref.get(_fsGetOpts());
           if (snap.exists && snap.data().items) {
             qnItems = snap.data().items;
           }
