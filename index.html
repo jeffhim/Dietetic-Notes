@@ -552,6 +552,94 @@
     .ql-cell-fill { position:relative; }
     .ql-cell-fill::after { content:'\f575'; font-family:'Font Awesome 6 Free'; font-weight:900; font-size:14px; }
 
+    /* ── Note-link toolbar button ──────────────────── */
+    .ql-note-link { position:relative; }
+    .ql-note-link::after { content:'\f0c1'; font-family:'Font Awesome 6 Free'; font-weight:900; font-size:13px; color:var(--c-primary); }
+    .ql-toolbar .ql-note-link { width:28px; height:24px; display:inline-flex !important; align-items:center; justify-content:center; }
+
+    /* ── Internal note link styling in editor ─────── */
+    .ql-editor a[href^="#note:"] {
+      color:#2DD4BF !important; text-decoration:none !important;
+      border-bottom:1.5px dashed rgba(45,212,191,0.5);
+      padding-bottom:1px; cursor:pointer;
+      transition:border-color 0.2s, color 0.2s;
+    }
+    .ql-editor a[href^="#note:"]:hover {
+      color:#45E0CC !important;
+      border-bottom-color:rgba(45,212,191,0.9);
+    }
+    .ql-editor a[href^="#note:"]::before {
+      content:'\f0c1'; font-family:'Font Awesome 6 Free'; font-weight:900;
+      font-size:10px; margin-right:4px; opacity:0.6;
+    }
+
+    /* Hide Quill tooltip when hovering internal note links */
+    .ql-snow .ql-tooltip[data-link^="#note:"] { display:none !important; }
+
+    /* ── Note picker overlay ──────────────────────── */
+    .note-picker-overlay {
+      display:none; position:fixed; inset:0; background:var(--c-overlay);
+      z-index:1300; align-items:flex-start; justify-content:center; padding-top:10vh;
+    }
+    .note-picker-overlay.active { display:flex; animation:fadeIn .15s ease; }
+    .note-picker-panel {
+      width:min(440px,92vw); max-height:70vh; background:var(--c-surface);
+      border-radius:var(--radius-lg); box-shadow:var(--shadow-lg);
+      display:flex; flex-direction:column; overflow:hidden;
+      animation:dialogPop .2s ease;
+    }
+    .note-picker-header {
+      padding:18px 20px 12px; border-bottom:1px solid var(--c-border); flex-shrink:0;
+    }
+    .note-picker-header h3 {
+      font-family:var(--font-accent); font-size:17px; font-weight:700;
+      color:var(--c-text); margin:0 0 12px; display:flex; align-items:center; gap:8px;
+    }
+    .note-picker-header h3 i { color:var(--c-primary); font-size:14px; }
+    .note-picker-search {
+      width:100%; height:40px; border:1px solid var(--c-border); border-radius:var(--radius-sm);
+      padding:0 12px 0 36px; font-size:16px; font-family:var(--font-main); color:var(--c-text);
+      background:var(--c-bg); outline:none; transition:border var(--transition);
+    }
+    .note-picker-search:focus { border-color:var(--c-primary); }
+    .note-picker-search-wrap {
+      position:relative;
+    }
+    .note-picker-search-wrap i {
+      position:absolute; left:12px; top:50%; transform:translateY(-50%);
+      color:var(--c-text-muted); font-size:13px; pointer-events:none;
+    }
+    .note-picker-list {
+      flex:1; overflow-y:auto; padding:8px 0; min-height:100px; max-height:calc(70vh - 120px);
+    }
+    .note-picker-group {
+      padding:6px 20px 2px; font-size:11px; font-weight:700; text-transform:uppercase;
+      letter-spacing:0.5px; color:var(--c-text-muted); font-family:var(--font-main);
+    }
+    .note-picker-item {
+      padding:10px 20px; cursor:pointer; display:flex; align-items:center; gap:10px;
+      transition:background 0.15s;
+    }
+    .note-picker-item:hover { background:var(--c-surface-2); }
+    .note-picker-item .npi-icon {
+      width:28px; height:28px; border-radius:6px; background:rgba(45,212,191,0.1);
+      display:flex; align-items:center; justify-content:center; flex-shrink:0;
+    }
+    .note-picker-item .npi-icon i { color:var(--c-primary); font-size:12px; }
+    .note-picker-item .npi-info { flex:1; min-width:0; }
+    .note-picker-item .npi-title {
+      font-size:14px; font-weight:600; color:var(--c-text);
+      white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+    }
+    .note-picker-item .npi-crumb {
+      font-size:11px; color:var(--c-text-muted); margin-top:2px;
+      white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+    }
+    .note-picker-empty {
+      padding:30px 20px; text-align:center; color:var(--c-text-muted);
+      font-size:14px; font-style:italic;
+    }
+
 
     /* Quill tooltip (edit existing links) */
     .ql-snow .ql-tooltip { background:var(--c-surface) !important; border:1px solid var(--c-border) !important; box-shadow:var(--shadow-md) !important; color:var(--c-text) !important; border-radius:var(--radius-sm) !important; padding:8px 14px !important; z-index:60; white-space:nowrap; }
@@ -676,6 +764,11 @@
     }
     .offline-bar.visible { display:flex; align-items:center; justify-content:center; gap:8px; }
     .offline-bar i { font-size:13px; }
+
+    /* ── Offline bar content compensation ─────────── */
+    body.is-offline .ql-editor { padding-bottom:90px !important; }
+    body.is-offline .list-scroll { padding-bottom:40px; }
+    body.is-offline .qn-list { padding-bottom:40px; }
 
     /* ── Quick Notes button & badge ────────────────── */
     .btn-topbar.btn-qn { position:relative; }
@@ -932,6 +1025,20 @@
   <!-- Global floating fill color picker (used by both main toolbar and table floating bar) -->
   <div id="global-fill-picker"></div>
 
+  <!-- NOTE PICKER (for internal note links) -->
+  <div class="note-picker-overlay" id="note-picker-overlay">
+    <div class="note-picker-panel">
+      <div class="note-picker-header">
+        <h3><i class="fas fa-link"></i> Link to Note</h3>
+        <div class="note-picker-search-wrap">
+          <i class="fas fa-search"></i>
+          <input type="text" class="note-picker-search" id="note-picker-search" placeholder="Search notes…">
+        </div>
+      </div>
+      <div class="note-picker-list" id="note-picker-list"></div>
+    </div>
+  </div>
+
   <!-- NEW NOTE DIALOG -->
   <div class="newnote-overlay" id="newnote-overlay">
     <div class="newnote-box">
@@ -1069,8 +1176,13 @@
       var bar = document.getElementById('offline-bar');
       if (!bar) return;
       _isOffline = !navigator.onLine;
-      if (_isOffline) bar.classList.add('visible');
-      else bar.classList.remove('visible');
+      if (_isOffline) {
+        bar.classList.add('visible');
+        document.body.classList.add('is-offline');
+      } else {
+        bar.classList.remove('visible');
+        document.body.classList.remove('is-offline');
+      }
     }
     window.addEventListener('online', function() { _isOffline = false; updateOfflineBar(); });
     window.addEventListener('offline', function() { _isOffline = true; updateOfflineBar(); });
@@ -2397,7 +2509,7 @@
           [{color:[]},{background:[]}],[{list:'ordered'},{list:'bullet'}],
           [{indent:'-1'},{indent:'+1'}],
           [{align:[false,'center','right']}],
-          ['blockquote','code-block'],['link','image'],['table-insert'],['cell-fill'],['clean'],
+          ['blockquote','code-block'],['link','note-link','image'],['table-insert'],['cell-fill'],['clean'],
           ['undo','redo']
         ],
         handlers:{
@@ -2569,6 +2681,7 @@
       });
 
       /* ── Table insert button: replace Quill default with SVG icon ── */
+      toolbar.addHandler('note-link', function() { openNotePicker(); });
       toolbar.addHandler('table-insert', function() { /* handled by click below */ });
 
       /* ── Cell fill button in main toolbar ── */
@@ -7094,6 +7207,198 @@
       tplSpecId = null;
       tplCatId = null;
     });
+
+    /* ═══════════════════════════════════════════════════
+       INTERNAL NOTE LINKS — link to other notes in-app
+       ═══════════════════════════════════════════════════ */
+    (function initNoteLinks() {
+      var pickerOverlay = document.getElementById('note-picker-overlay');
+      var pickerList = document.getElementById('note-picker-list');
+      var pickerSearch = document.getElementById('note-picker-search');
+      if (!pickerOverlay || !pickerList || !pickerSearch) return;
+
+      var savedRange = null; /* Quill selection range to restore after picking */
+
+      /* ── Get all notes as flat array with crumb info ── */
+      function getAllNotes() {
+        var results = [];
+        var catMap = {};
+        S.categories.forEach(function(c) { catMap[c.id] = c.name; });
+        var specMap = {};
+        Object.keys(S.specialties).forEach(function(catId) {
+          (S.specialties[catId] || []).forEach(function(sp) { specMap[sp.id] = sp.name; });
+        });
+        Object.keys(S.notes).forEach(function(specId) {
+          (S.notes[specId] || []).forEach(function(note) {
+            var catName = catMap[note.categoryId] || '';
+            var specName = specMap[note.specialtyId] || specMap[specId] || '';
+            results.push({
+              id: note.id,
+              title: note.title || 'Untitled Note',
+              catId: note.categoryId,
+              specId: note.specialtyId || specId,
+              crumb: catName + (catName && specName ? ' › ' : '') + specName
+            });
+          });
+        });
+        /* Sort alphabetically by title */
+        results.sort(function(a, b) { return a.title.localeCompare(b.title); });
+        return results;
+      }
+
+      /* ── Render note list (filtered) ── */
+      function renderPickerList(filter) {
+        var notes = getAllNotes();
+        var q = (filter || '').toLowerCase().trim();
+        if (q) {
+          notes = notes.filter(function(n) {
+            return n.title.toLowerCase().indexOf(q) !== -1 || n.crumb.toLowerCase().indexOf(q) !== -1;
+          });
+        }
+        pickerList.innerHTML = '';
+        if (notes.length === 0) {
+          pickerList.innerHTML = '<div class="note-picker-empty">No notes found</div>';
+          return;
+        }
+        /* Group by crumb */
+        var groups = {};
+        notes.forEach(function(n) {
+          var key = n.crumb || 'Uncategorized';
+          if (!groups[key]) groups[key] = [];
+          groups[key].push(n);
+        });
+        Object.keys(groups).sort().forEach(function(groupName) {
+          var groupEl = document.createElement('div');
+          groupEl.className = 'note-picker-group';
+          groupEl.textContent = groupName;
+          pickerList.appendChild(groupEl);
+          groups[groupName].forEach(function(note) {
+            var item = document.createElement('div');
+            item.className = 'note-picker-item';
+            item.dataset.noteId = note.id;
+            item.dataset.noteTitle = note.title;
+            item.dataset.catId = note.catId || '';
+            item.dataset.specId = note.specId || '';
+            item.innerHTML = '<div class="npi-icon"><i class="fas fa-file-lines"></i></div>'
+              + '<div class="npi-info"><div class="npi-title">' + esc(note.title) + '</div>'
+              + '<div class="npi-crumb">' + esc(note.crumb) + '</div></div>';
+            item.addEventListener('click', function() {
+              insertNoteLink(note.id, note.title, note.catId, note.specId);
+              closeNotePicker();
+            });
+            pickerList.appendChild(item);
+          });
+        });
+      }
+
+      /* ── Open picker ── */
+      window.openNotePicker = function() {
+        /* Save current Quill selection */
+        var sel = quill.getSelection();
+        savedRange = sel ? { index: sel.index, length: sel.length } : null;
+        pickerSearch.value = '';
+        renderPickerList('');
+        pickerOverlay.classList.add('active');
+        setTimeout(function() { pickerSearch.focus(); }, 150);
+      };
+
+      /* ── Close picker ── */
+      function closeNotePicker() {
+        pickerOverlay.classList.remove('active');
+        /* Restore focus to editor */
+        if (savedRange !== null) {
+          setTimeout(function() { quill.focus(); quill.setSelection(savedRange.index, savedRange.length); }, 50);
+        }
+      }
+
+      /* ── Insert note link into editor ── */
+      function insertNoteLink(noteId, noteTitle, catId, specId) {
+        if (!savedRange) savedRange = { index: quill.getLength() - 1, length: 0 };
+        var insertIdx = savedRange.index;
+
+        /* If there's selected text, use it as the display text; otherwise use note title */
+        if (savedRange.length > 0) {
+          /* Format selected text as a link */
+          quill.formatText(insertIdx, savedRange.length, 'link', '#note:' + noteId, 'user');
+        } else {
+          /* Insert note title as linked text */
+          quill.insertText(insertIdx, noteTitle, 'link', '#note:' + noteId, 'user');
+        }
+      }
+
+      /* ── Search input ── */
+      pickerSearch.addEventListener('input', function() {
+        renderPickerList(this.value);
+      });
+      pickerSearch.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') { e.preventDefault(); closeNotePicker(); }
+        if (e.key === 'Enter') {
+          /* Select first visible item */
+          var first = pickerList.querySelector('.note-picker-item');
+          if (first) first.click();
+        }
+      });
+
+      /* Close on overlay click or Escape */
+      pickerOverlay.addEventListener('click', function(e) { if (e.target === pickerOverlay) closeNotePicker(); });
+      document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape' && pickerOverlay.classList.contains('active')) { closeNotePicker(); e.stopPropagation(); }
+      });
+
+      /* ═══ CLICK INTERCEPTION — navigate to linked notes ═══ */
+
+      /* Helper: navigate to a note by ID, correctly setting cat/spec context */
+      function navigateToNote(noteId) {
+        /* Find the note across all specialties */
+        var noteData = null;
+        var noteSpecId = null;
+        for (var k of Object.keys(S.notes)) {
+          var found = S.notes[k].find(function(n) { return n.id === noteId; });
+          if (found) { noteData = found; noteSpecId = k; break; }
+        }
+        if (!noteData) return false;
+
+        /* Set correct category and specialty context */
+        var catId = noteData.categoryId || null;
+        var specId = noteData.specialtyId || noteSpecId;
+        if (catId) S.currentCatId = catId;
+        if (specId) S.currentSpecId = specId;
+
+        /* Now open the note (openNote uses S.currentCatId/S.currentSpecId for breadcrumb) */
+        openNote(noteId);
+        return true;
+      }
+
+      /* Intercept clicks on internal note links in the editor */
+      document.querySelector('.editor-body').addEventListener('click', function(e) {
+        var link = e.target.closest('a[href^="#note:"]');
+        if (!link) return;
+        e.preventDefault();
+        e.stopPropagation();
+
+        var href = link.getAttribute('href');
+        var noteId = href.replace('#note:', '');
+        if (!noteId) return;
+
+        /* Save current note before navigating */
+        navigateToNote(noteId);
+      });
+
+      /* Also handle clicks on note links in read-only contexts (e.g. if Quill is blurred) */
+      quill.root.addEventListener('click', function(e) {
+        var link = e.target.closest('a[href^="#note:"]');
+        if (!link) return;
+        e.preventDefault();
+        e.stopPropagation();
+
+        var href = link.getAttribute('href');
+        var noteId = href.replace('#note:', '');
+        if (!noteId) return;
+
+        navigateToNote(noteId);
+      });
+
+    })();
 
     /* ═══════════════════════════════════════════════════
        QUICK NOTES — lightweight scratchpad that persists
