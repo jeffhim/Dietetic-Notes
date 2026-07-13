@@ -6,7 +6,7 @@
    assets (fonts, JS libraries, CSS).
    ═══════════════════════════════════════════════════════ */
 
-var CACHE_VERSION = 'dietetics-v5.1-1';
+var CACHE_VERSION = 'dietetics-v6.1-1';
 
 /* Resources to pre-cache on install */
 var PRECACHE_URLS = [
